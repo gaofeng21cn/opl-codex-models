@@ -39,6 +39,7 @@ enum CustomModelEditor {
 
         let nextPriority = models.compactMap { CatalogParser.integer($0["priority"]) }.max().map { $0 + 1 } ?? 1000
         newModel["slug"] = draft.normalizedSlug
+        newModel["visibility"] = "list"
         newModel["display_name"] = draft.normalizedDisplayName
         newModel["description"] = draft.normalizedDescription
         newModel["context_window"] = draft.contextWindow

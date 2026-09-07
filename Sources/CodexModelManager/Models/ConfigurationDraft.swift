@@ -10,11 +10,12 @@ struct ConfigurationDraft: Equatable {
     var launchAgentPlistPath = ""
     var launchAgentLabel = ""
     var backupDirectoryPath = ""
+    var visibilityOverrides: [String: ModelVisibility] = [:]
 
     init() {}
 
     init(configuration: AppConfiguration) {
-        codexRuntimePath = configuration.codexRuntimePath ?? CodexRuntimeLocator.find()?.path ?? ""
+        codexRuntimePath = configuration.codexRuntimePath ?? ""
         customSourcePath = configuration.customSourcePath
         mergedCatalogPath = configuration.mergedCatalogPath
         syncLogPath = configuration.syncLogPath
@@ -22,24 +23,25 @@ struct ConfigurationDraft: Equatable {
         launchAgentPlistPath = configuration.launchAgentPlistPath
         launchAgentLabel = configuration.launchAgentLabel
         backupDirectoryPath = configuration.backupDirectoryPath
+        visibilityOverrides = configuration.visibilityOverrides ?? [:]
     }
 
     var configuration: AppConfiguration {
         AppConfiguration(
-            codexRuntimePath: codexRuntimePath,
+            codexRuntimePath: codexRuntimePath.isEmpty ? nil : codexRuntimePath,
             customSourcePath: customSourcePath,
             mergedCatalogPath: mergedCatalogPath,
             syncLogPath: syncLogPath,
             errorLogPath: errorLogPath,
             launchAgentPlistPath: launchAgentPlistPath,
             launchAgentLabel: launchAgentLabel,
-            backupDirectoryPath: backupDirectoryPath
+            backupDirectoryPath: backupDirectoryPath,
+            visibilityOverrides: visibilityOverrides
         )
     }
 
     var isComplete: Bool {
         [
-            codexRuntimePath,
             customSourcePath,
             mergedCatalogPath,
             syncLogPath,

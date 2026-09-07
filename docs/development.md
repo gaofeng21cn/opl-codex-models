@@ -11,6 +11,10 @@
 swift test
 ```
 
+SwiftPM 按 `Package.swift` 和 `Package.resolved` 解析 TOMLKit，首次构建需要取得
+依赖源码。第三方许可由 `THIRD_PARTY_NOTICES.txt` 持有，构建脚本将它和项目许可证
+一并放入 App 资源目录。
+
 需要安装并启动开发版本时执行：
 
 ```bash

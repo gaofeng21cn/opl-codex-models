@@ -104,12 +104,14 @@ struct ContentView: View {
             OverviewView(store: store)
         case .allModels:
             ModelListView(
+                store: store,
                 title: "全部模型",
                 subtitle: "OpenAI 官方目录与本机自定义模型的当前合并结果",
                 models: store.snapshot.models
             )
         case .customModels:
             ModelListView(
+                store: store,
                 title: "自定义模型",
                 subtitle: "由权威自定义源维护，优先级位于官方模型之后",
                 models: store.snapshot.customModels,

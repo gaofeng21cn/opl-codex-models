@@ -6,8 +6,8 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 configuration="debug"
 output_path="$project_root/dist/CodexModelManager.app"
 signing_identity="-"
-version="0.2.0"
-build_number="2"
+version="0.3.0"
+build_number="3"
 universal=0
 
 while [[ $# -gt 0 ]]; do
@@ -75,6 +75,8 @@ fi
 /bin/mkdir -p "$macos_path" "$helpers_path" "$resources_path"
 /usr/bin/ditto "$binary_dir/CodexModelManager" "$macos_path/CodexModelManager"
 /usr/bin/ditto "$binary_dir/CodexModelSync" "$helpers_path/CodexModelSync"
+/usr/bin/ditto "$project_root/LICENSE" "$resources_path/LICENSE"
+/usr/bin/ditto "$project_root/THIRD_PARTY_NOTICES.txt" "$resources_path/THIRD_PARTY_NOTICES.txt"
 
 icon_work_directory="$(/usr/bin/mktemp -d /tmp/codex-model-manager-icon.XXXXXX)"
 trap '/bin/rm -rf -- "$icon_work_directory"' EXIT

@@ -93,6 +93,7 @@ final class CustomModelEditorTests: XCTestCase {
         let catalog = try JSONSerialization.data(withJSONObject: [
             "models": [[
                 "slug": "gpt-official",
+                "visibility": "hide",
                 "display_name": "GPT Official",
                 "description": "Official template",
                 "context_window": 200_000,
@@ -121,5 +122,6 @@ final class CustomModelEditorTests: XCTestCase {
         XCTAssertEqual(model["slug"] as? String, "hosted-model")
         XCTAssertEqual(model["wire_api"] as? String, "responses")
         XCTAssertEqual(model["priority"] as? Int, 1000)
+        XCTAssertEqual(model["visibility"] as? String, "list")
     }
 }

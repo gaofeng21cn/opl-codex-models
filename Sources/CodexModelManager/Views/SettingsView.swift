@@ -1,18 +1,42 @@
 import AppKit
+import CodexModelCore
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: CatalogStore
     @State private var draft = ConfigurationDraft()
     @State private var loaded = false
+    @State private var runtimes: [CodexRuntime] = []
 
     var body: some View {
+        TabView {
+            catalogSettings
+                .tabItem { Label("模型目录", systemImage: "square.stack.3d.up") }
+            ContextManagementView(store: store)
+                .tabItem { Label("实验功能", systemImage: "flask") }
+        }
+        .frame(width: 680, height: 580)
+        .task {
+            runtimes = await Task.detached { CodexRuntimeLocator.discover() }.value
+        }
+    }
+
+    private var catalogSettings: some View {
         Form {
             Section("Codex") {
                 LabeledContent("运行时") {
                     HStack(spacing: 8) {
-                        TextField("codex 可执行文件", text: $draft.codexRuntimePath)
-                            .multilineTextAlignment(.trailing)
+                        Picker("运行时", selection: $draft.codexRuntimePath) {
+                            Text("自动选择最新版本").tag("")
+                            ForEach(runtimes) { runtime in
+                                Text("\(runtime.version) · \(runtime.url.path)").tag(runtime.url.path)
+                            }
+                            if !draft.codexRuntimePath.isEmpty,
+                               !runtimes.contains(where: { $0.url.path == draft.codexRuntimePath }) {
+                                Text(draft.codexRuntimePath).tag(draft.codexRuntimePath)
+                            }
+                        }
+                        .labelsHidden()
                         Button {
                             chooseRuntime()
                         } label: {
@@ -77,11 +101,10 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(!draft.isComplete || store.isApplyingConfiguration)
+                .disabled(!draft.isComplete || store.isBusy)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 640, height: 520)
         .onAppear {
             guard !loaded else { return }
             loaded = true

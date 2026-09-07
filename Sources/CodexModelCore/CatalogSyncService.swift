@@ -44,7 +44,18 @@ public struct CatalogSyncService: Sendable {
         }
         try ensureInitialFiles()
 
-        let bundledResult = try ProcessRunner.run(paths.codexRuntime, arguments: ["debug", "models", "--bundled"])
+        let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "codex-model-manager-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: isolatedCodexHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: isolatedCodexHome) }
+
+        let bundledResult = try ProcessRunner.run(
+            paths.codexRuntime,
+            arguments: ["debug", "models", "--bundled"],
+            environment: ["CODEX_HOME": isolatedCodexHome.path]
+        )
         guard bundledResult.exitCode == 0 else {
             throw CoreError.processFailed(Self.processMessage("读取 Codex 官方模型失败", bundledResult))
         }
@@ -81,6 +92,12 @@ public struct CatalogSyncService: Sendable {
             if copy["supports_reasoning_summaries"] == nil {
                 copy["supports_reasoning_summaries"] = true
             }
+            if copy["supports_parallel_tool_calls"] == nil {
+                copy["supports_parallel_tool_calls"] = true
+            }
+            if let slug = copy["slug"] as? String, let visibility = paths.visibilityOverrides[slug] {
+                copy["visibility"] = visibility.rawValue
+            }
             return copy
         }
         let prioritizedCustom = customModels.enumerated().map { index, model in
@@ -88,6 +105,12 @@ public struct CatalogSyncService: Sendable {
             copy["priority"] = priorityCeiling + index + 1
             if copy["supports_reasoning_summaries"] == nil {
                 copy["supports_reasoning_summaries"] = true
+            }
+            if copy["supports_parallel_tool_calls"] == nil {
+                copy["supports_parallel_tool_calls"] = true
+            }
+            if let slug = copy["slug"] as? String, let visibility = paths.visibilityOverrides[slug] {
+                copy["visibility"] = visibility.rawValue
             }
             return copy
         }

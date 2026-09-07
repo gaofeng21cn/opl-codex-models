@@ -19,6 +19,7 @@ final class CatalogStore: ObservableObject {
     private var configurationErrorMessage: String?
 
     var isConfigured: Bool { service != nil }
+    var isBusy: Bool { isSyncing || isAddingModel || isApplyingConfiguration }
 
     init(configurationURL: URL = AppConfiguration.defaultURL) {
         self.configurationURL = configurationURL
@@ -50,7 +51,7 @@ final class CatalogStore: ObservableObject {
     }
 
     func applyConfiguration(_ configuration: AppConfiguration) async -> Bool {
-        guard !isApplyingConfiguration else { return false }
+        guard !isBusy else { return false }
         isApplyingConfiguration = true
         defer { isApplyingConfiguration = false }
         do {
@@ -94,7 +95,7 @@ final class CatalogStore: ObservableObject {
     }
 
     func syncNow() async {
-        guard !isSyncing else { return }
+        guard !isBusy else { return }
         guard let service else {
             errorMessage = configurationErrorMessage
             return
@@ -114,7 +115,7 @@ final class CatalogStore: ObservableObject {
     }
 
     func addModel(_ draft: NewModelDraft) async -> Bool {
-        guard !isAddingModel else { return false }
+        guard !isBusy else { return false }
         guard let service else {
             errorMessage = configurationErrorMessage
             return false
@@ -138,6 +139,18 @@ final class CatalogStore: ObservableObject {
 
     func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func setVisibility(_ visibility: ModelVisibility?, for slug: String) async {
+        do {
+            var updated = try AppConfiguration.read(from: configurationURL)
+            var overrides = updated.visibilityOverrides ?? [:]
+            overrides[slug] = visibility
+            updated.visibilityOverrides = overrides
+            _ = await applyConfiguration(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private static var packagedHelperURL: URL {

@@ -11,9 +11,13 @@ let package = Package(
         .executable(name: "CodexModelManager", targets: ["CodexModelManager"]),
         .executable(name: "CodexModelSync", targets: ["CodexModelSync"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
+    ],
     targets: [
         .target(
             name: "CodexModelCore",
+            dependencies: [.product(name: "TOMLKit", package: "TOMLKit")],
             path: "Sources/CodexModelCore"
         ),
         .executableTarget(

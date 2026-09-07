@@ -53,7 +53,7 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Codex 模型目录")
                     .font(.title2.weight(.semibold))
-                Text("官方模型随 ChatGPT App 更新，自定义模型由本机权威源维护。")
+                Text(store.snapshot.latestRecord?.appVersion ?? "等待首次同步")
                     .foregroundStyle(.secondary)
             }
             Spacer()

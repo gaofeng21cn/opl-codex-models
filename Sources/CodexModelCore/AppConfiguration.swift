@@ -9,6 +9,7 @@ public struct CatalogPaths: Equatable, Sendable {
     public let launchAgentPlist: URL
     public let launchAgentLabel: String
     public let backupDirectory: URL
+    public let visibilityOverrides: [String: ModelVisibility]
 
     public init(
         codexRuntime: URL,
@@ -18,7 +19,8 @@ public struct CatalogPaths: Equatable, Sendable {
         errorLog: URL,
         launchAgentPlist: URL,
         launchAgentLabel: String,
-        backupDirectory: URL
+        backupDirectory: URL,
+        visibilityOverrides: [String: ModelVisibility] = [:]
     ) {
         self.codexRuntime = codexRuntime
         self.customSource = customSource
@@ -28,6 +30,7 @@ public struct CatalogPaths: Equatable, Sendable {
         self.launchAgentPlist = launchAgentPlist
         self.launchAgentLabel = launchAgentLabel
         self.backupDirectory = backupDirectory
+        self.visibilityOverrides = visibilityOverrides
     }
 }
 
@@ -40,6 +43,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var launchAgentPlistPath: String
     public var launchAgentLabel: String
     public var backupDirectoryPath: String
+    public var visibilityOverrides: [String: ModelVisibility]?
 
     public init(
         codexRuntimePath: String?,
@@ -49,7 +53,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         errorLogPath: String,
         launchAgentPlistPath: String,
         launchAgentLabel: String,
-        backupDirectoryPath: String
+        backupDirectoryPath: String,
+        visibilityOverrides: [String: ModelVisibility]? = nil
     ) {
         self.codexRuntimePath = codexRuntimePath
         self.customSourcePath = customSourcePath
@@ -59,6 +64,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         self.launchAgentPlistPath = launchAgentPlistPath
         self.launchAgentLabel = launchAgentLabel
         self.backupDirectoryPath = backupDirectoryPath
+        self.visibilityOverrides = visibilityOverrides
     }
 
     public static var defaultURL: URL {
@@ -71,7 +77,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public static func recommended(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws -> AppConfiguration {
-        guard let runtime = CodexRuntimeLocator.find() else {
+        guard CodexRuntimeLocator.find() != nil else {
             throw CoreError.runtimeNotFound
         }
         let codexDirectory = homeDirectory.appendingPathComponent(".codex", isDirectory: true)
@@ -83,7 +89,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
             .appendingPathComponent("CodexModelManager", isDirectory: true)
         let label = "com.onepersonlab.codex-model-manager.sync"
         return AppConfiguration(
-            codexRuntimePath: runtime.path,
+            codexRuntimePath: nil,
             customSourcePath: codexDirectory.appendingPathComponent("custom-models.json").path,
             mergedCatalogPath: codexDirectory.appendingPathComponent("models.json").path,
             syncLogPath: logDirectory.appendingPathComponent("sync.jsonl").path,
@@ -148,7 +154,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
                 backupDirectoryPath,
                 field: "backupDirectoryPath",
                 homeDirectory: homeDirectory
-            )
+            ),
+            visibilityOverrides: visibilityOverrides ?? [:]
         )
     }
 
@@ -196,15 +203,37 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
 
 public enum CodexRuntimeLocator {
     public static func find(fileManager: FileManager = .default) -> URL? {
+        discover(fileManager: fileManager).first?.url
+    }
+
+    public static func discover(fileManager: FileManager = .default) -> [CodexRuntime] {
         let candidates = [
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
             "/Applications/ChatGPT.app/Contents/Resources/codex",
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex"
         ]
         return candidates
             .map(URL.init(fileURLWithPath:))
-            .first { fileManager.isExecutableFile(atPath: $0.path) }
+            .filter { fileManager.isExecutableFile(atPath: $0.path) }
+            .compactMap { url in
+                guard let result = try? ProcessRunner.run(url, arguments: ["--version"]),
+                      result.exitCode == 0 else { return nil }
+                return CodexRuntime(url: url, version: result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            .sorted { $0.version.compare($1.version, options: .numeric) == .orderedDescending }
     }
+}
+
+public struct CodexRuntime: Identifiable, Sendable {
+    public let url: URL
+    public let version: String
+    public var id: String { url.path }
+}
+
+public enum ModelVisibility: String, Codable, Sendable, CaseIterable {
+    case list
+    case hide
 }
 
 public enum CoreError: LocalizedError {

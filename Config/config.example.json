@@ -1,10 +1,11 @@
 {
   "backupDirectoryPath": "~/Library/Application Support/CodexModelManager/Backups",
-  "codexRuntimePath": "/Applications/ChatGPT.app/Contents/Resources/codex",
+  "codexRuntimePath": null,
   "customSourcePath": "~/.codex/custom-models.json",
   "errorLogPath": "~/Library/Logs/CodexModelManager/sync.error.log",
   "launchAgentLabel": "com.onepersonlab.codex-model-manager.sync",
   "launchAgentPlistPath": "~/Library/LaunchAgents/com.onepersonlab.codex-model-manager.sync.plist",
   "mergedCatalogPath": "~/.codex/models.json",
-  "syncLogPath": "~/Library/Logs/CodexModelManager/sync.jsonl"
+  "syncLogPath": "~/Library/Logs/CodexModelManager/sync.jsonl",
+  "visibilityOverrides": {}
 }

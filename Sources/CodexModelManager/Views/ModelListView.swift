@@ -1,6 +1,8 @@
+import CodexModelCore
 import SwiftUI
 
 struct ModelListView: View {
+    @ObservedObject var store: CatalogStore
     let title: String
     let subtitle: String
     let models: [CatalogModel]
@@ -86,7 +88,7 @@ struct ModelListView: View {
                 .frame(minWidth: 620)
                 .clipped()
 
-                ModelDetailView(model: selectedModel)
+                ModelDetailView(store: store, model: selectedModel)
                     .frame(minWidth: 300, idealWidth: 320, maxWidth: 380)
                     .clipped()
             }
@@ -98,6 +100,7 @@ struct ModelListView: View {
 }
 
 private struct ModelDetailView: View {
+    @ObservedObject var store: CatalogStore
     let model: CatalogModel?
 
     var body: some View {
@@ -134,6 +137,17 @@ private struct ModelDetailView: View {
                     DetailRow(title: "上下文来源", value: model.contextSourceTitle)
                     DetailRow(title: "优先级", value: model.priority.map(String.init) ?? "未知")
                     DetailRow(title: "目录可见性", value: model.visibility ?? "未知")
+                    Picker("模型选择器", selection: Binding(
+                        get: { store.configuration?.visibilityOverrides?[model.slug]?.rawValue ?? "source" },
+                        set: { value in
+                            Task { await store.setVisibility(ModelVisibility(rawValue: value), for: model.slug) }
+                        }
+                    )) {
+                        Text("跟随来源").tag("source")
+                        Text("显示").tag("list")
+                        Text("隐藏").tag("hide")
+                    }
+                    .disabled(store.isBusy)
                     DetailRow(title: "API 支持", value: model.supportedInAPI ? "是" : "否")
                     DetailRow(
                         title: "原始图像 detail",

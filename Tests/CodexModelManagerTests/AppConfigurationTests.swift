@@ -22,6 +22,7 @@ final class AppConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(paths.mergedCatalog.path, "/var/tmp/models.json")
         XCTAssertEqual(paths.launchAgentLabel, "com.example.model-catalog-sync")
+        XCTAssertTrue(paths.visibilityOverrides.isEmpty)
         XCTAssertEqual(
             paths.backupDirectory.path,
             "/tmp/codex-model-manager-home/.codex/backups/model-catalog"
