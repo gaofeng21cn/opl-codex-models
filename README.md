@@ -26,10 +26,10 @@ brew install --cask opl-codex-model-manager
 
 打开应用，点击“使用推荐设置”即可。应用会自动：
 
-- 查找 ChatGPT 中附带的 Codex 运行时
+- 优先查找 ChatGPT 附带的 Codex，其次检查 Homebrew 或 `/usr/local/bin` 中的 Codex
 - 创建自定义模型源和合并模型目录
 - 将模型目录写入 `~/.codex/config.toml`
-- 安装每天执行一次的后台同步任务
+- 安装每 24 小时执行一次、并在 Codex 运行时文件变化时触发的后台同步任务
 
 不需要复制配置文件，也不需要手工填写本机路径。需要沿用现有目录或任务时，可在“设置”中修改所有路径后再应用。
 
@@ -68,18 +68,9 @@ Codex 内置模型 ─┐
 
 普通使用不需要直接编辑这个文件。仓库中的 `Config/config.example.json` 只用于排查问题或自动化部署，其中不含个人路径、令牌或密钥。
 
-如果已经使用旧版应用，原有配置会继续加载。进入“设置”并点击“保存并应用”后，应用会补全 Codex 运行时并接管每日同步任务。
-
 ## 从源码构建
 
-需要 macOS 14、Xcode 命令行工具和 Swift 5.10 或更高版本：
-
-```bash
-swift test
-./script/build_and_run.sh --verify
-```
-
-应用会安装到 `~/Applications/CodexModelManager.app`。此开发构建使用临时签名；正式 Release 使用 Developer ID 签名并通过 Apple 公证。
+构建、测试、开发安装和发行流程见[开发与发行](docs/development.md)。
 
 ## 许可证
 
