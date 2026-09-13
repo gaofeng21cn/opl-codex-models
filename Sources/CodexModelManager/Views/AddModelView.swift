@@ -13,7 +13,7 @@ struct AddModelView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("新增自定义模型")
                         .font(.title3.weight(.semibold))
-                    Text("从现有模型继承 Codex 工具、推理和消息配置。")
+                    Text("选择模板，再按实际能力调整上下文、图像和推理配置。")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -67,14 +67,36 @@ struct AddModelView: View {
                     )
                     .disabled(!draft.supportsImage)
                 }
+
+                Section("推理配置") {
+                    Toggle("单独设置推理档位", isOn: Binding(
+                        get: { draft.reasoning != nil },
+                        set: { enabled in
+                            draft.reasoning = enabled
+                                ? templates.first(where: { $0.slug == draft.templateSlug })?.reasoning ?? ReasoningSettings()
+                                : nil
+                        }
+                    ))
+                    if draft.reasoning != nil {
+                        ReasoningFields(settings: Binding(
+                            get: { draft.reasoning ?? ReasoningSettings() },
+                            set: { draft.reasoning = $0 }
+                        ))
+                    } else {
+                        Text("沿用模板中的推理档位和默认值。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
+            .disabled(store.isBusy)
 
             Divider()
 
             HStack {
-                Text("保存前会备份权威自定义模型源。")
+                Text("保存前会备份自定义模型源文件。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -82,6 +104,7 @@ struct AddModelView: View {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
+                .disabled(store.isBusy)
 
                 Button {
                     Task {
@@ -98,22 +121,21 @@ struct AddModelView: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!canSave || store.isAddingModel)
+                .disabled(!canSave || store.isBusy)
             }
             .padding(16)
         }
-        .frame(width: 590, height: 560)
+        .frame(width: 590, height: 640)
+        .interactiveDismissDisabled(store.isBusy)
         .onAppear {
             if let template = templates.last {
                 draft.templateSlug = template.slug
-                draft.contextWindow = template.contextWindow ?? draft.contextWindow
+                applyTemplate(template)
             }
         }
         .onChange(of: draft.templateSlug) { _, slug in
             if let template = templates.first(where: { $0.slug == slug }) {
-                draft.contextWindow = template.contextWindow ?? draft.contextWindow
-                draft.supportsImage = template.inputModalities.contains("image")
-                draft.supportsOriginalImageDetail = template.supportsOriginalImageDetail
+                applyTemplate(template)
             }
         }
         .onChange(of: draft.supportsImage) { _, supportsImage in
@@ -129,5 +151,13 @@ struct AddModelView: View {
             && !draft.normalizedDescription.isEmpty
             && !draft.templateSlug.isEmpty
             && draft.contextWindow > 0
+            && (draft.reasoning?.isValid ?? true)
+    }
+
+    private func applyTemplate(_ template: CatalogModel) {
+        draft.contextWindow = template.contextWindow ?? draft.contextWindow
+        draft.supportsImage = template.inputModalities.contains("image")
+        draft.supportsOriginalImageDetail = template.supportsOriginalImageDetail
+        draft.reasoning = template.reasoning.supportedEfforts.isEmpty ? nil : template.reasoning
     }
 }

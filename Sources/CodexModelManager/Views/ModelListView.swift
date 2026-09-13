@@ -102,6 +102,7 @@ struct ModelListView: View {
 private struct ModelDetailView: View {
     @ObservedObject var store: CatalogStore
     let model: CatalogModel?
+    @State private var isEditingReasoning = false
 
     var body: some View {
         if let model {
@@ -135,6 +136,22 @@ private struct ModelDetailView: View {
                     DetailRow(title: "当前上下文", value: AppFormatters.tokenCount(model.contextWindow))
                     DetailRow(title: "最大上下文", value: AppFormatters.tokenCount(model.maxContextWindow))
                     DetailRow(title: "上下文来源", value: model.contextSourceTitle)
+                    DetailRow(
+                        title: "推理档位",
+                        value: model.reasoning.supportedEfforts.isEmpty
+                            ? "来源未提供" : model.reasoning.supportedEfforts.joined(separator: " / ")
+                    )
+                    DetailRow(
+                        title: "默认推理档位",
+                        value: model.reasoning.defaultEffort.isEmpty ? "来源未提供" : model.reasoning.defaultEffort
+                    )
+                    if model.source == .custom {
+                        Button("编辑推理档位…") { isEditingReasoning = true }
+                            .disabled(store.isBusy)
+                            .sheet(isPresented: $isEditingReasoning) {
+                                EditReasoningView(store: store, model: model)
+                            }
+                    }
                     DetailRow(title: "优先级", value: model.priority.map(String.init) ?? "未知")
                     DetailRow(title: "目录可见性", value: model.visibility ?? "未知")
                     Picker("模型选择器", selection: Binding(

@@ -6,8 +6,8 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 configuration="debug"
 output_path="$project_root/dist/CodexModelManager.app"
 signing_identity="-"
-version="0.3.0"
-build_number="3"
+version="0.4.0"
+build_number="4"
 universal=0
 
 while [[ $# -gt 0 ]]; do
@@ -77,6 +77,8 @@ fi
 /usr/bin/ditto "$binary_dir/CodexModelSync" "$helpers_path/CodexModelSync"
 /usr/bin/ditto "$project_root/LICENSE" "$resources_path/LICENSE"
 /usr/bin/ditto "$project_root/THIRD_PARTY_NOTICES.txt" "$resources_path/THIRD_PARTY_NOTICES.txt"
+/usr/bin/ditto "$project_root/Resources/en.lproj" "$resources_path/en.lproj"
+/usr/bin/ditto "$project_root/Resources/zh_CN.lproj" "$resources_path/zh_CN.lproj"
 
 icon_work_directory="$(/usr/bin/mktemp -d /tmp/codex-model-manager-icon.XXXXXX)"
 trap '/bin/rm -rf -- "$icon_work_directory"' EXIT
@@ -103,7 +105,8 @@ create_icon_size 1024 icon_512x512@2x.png
 
 /usr/bin/plutil -create xml1 "$plist_path"
 /usr/bin/plutil -insert CFBundleDevelopmentRegion -string "zh_CN" "$plist_path"
-/usr/bin/plutil -insert CFBundleDisplayName -string "Codex 模型管理器" "$plist_path"
+# Preserve the filesystem name; localized metadata supplies the visible product name.
+/usr/bin/plutil -insert CFBundleDisplayName -string "CodexModelManager" "$plist_path"
 /usr/bin/plutil -insert CFBundleExecutable -string "CodexModelManager" "$plist_path"
 /usr/bin/plutil -insert CFBundleIconFile -string "AppIcon" "$plist_path"
 /usr/bin/plutil -insert CFBundleIdentifier -string "com.onepersonlab.codex-model-manager" "$plist_path"

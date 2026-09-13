@@ -51,6 +51,9 @@ enum CustomModelEditor {
             newModel["supports_reasoning_summaries"] = true
         }
         newModel["priority"] = nextPriority
+        if let reasoning = draft.reasoning {
+            try applyReasoning(reasoning, to: &newModel)
+        }
 
         models.append(newModel)
         root["models"] = models
@@ -65,5 +68,37 @@ enum CustomModelEditor {
 
     static func isValidSlug(_ slug: String) -> Bool {
         slug.range(of: #"^[a-z0-9][a-z0-9._-]*$"#, options: .regularExpression) != nil
+    }
+
+    static func updatingReasoning(
+        _ settings: ReasoningSettings,
+        for slug: String,
+        in sourceData: Data
+    ) throws -> Data {
+        guard
+            var root = try JSONSerialization.jsonObject(with: sourceData) as? [String: Any],
+            var models = root["models"] as? [[String: Any]],
+            let index = models.firstIndex(where: { $0["slug"] as? String == slug })
+        else {
+            throw AppError.invalidData("只能编辑自定义模型源中已有模型的推理配置。")
+        }
+        try applyReasoning(settings, to: &models[index])
+        root["models"] = models
+        return try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        ) + Data([0x0A])
+    }
+
+    private static func applyReasoning(_ settings: ReasoningSettings, to model: inout [String: Any]) throws {
+        guard settings.isValid else {
+            throw AppError.invalidData("请至少选择一个推理档位，并将默认档位设为其中之一。")
+        }
+        let existing = model["supported_reasoning_levels"] as? [[String: Any]] ?? []
+        model["supported_reasoning_levels"] = settings.supportedEfforts.map { effort in
+            existing.first { $0["effort"] as? String == effort }
+                ?? ["effort": effort, "description": "Reasoning effort: \(effort)"]
+        }
+        model["default_reasoning_level"] = settings.defaultEffort
     }
 }

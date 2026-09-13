@@ -8,6 +8,7 @@ struct NewModelDraft {
     var contextWindow = 262_144
     var supportsImage = false
     var supportsOriginalImageDetail = false
+    var reasoning: ReasoningSettings?
 
     var normalizedSlug: String {
         slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

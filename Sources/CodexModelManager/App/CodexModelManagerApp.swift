@@ -14,7 +14,7 @@ struct CodexModelManagerApp: App {
     @StateObject private var store = CatalogStore()
 
     var body: some Scene {
-        WindowGroup("Codex 模型管理器") {
+        WindowGroup("Codex Models") {
             ContentView(store: store)
                 .frame(minWidth: 1_280, minHeight: 680)
         }

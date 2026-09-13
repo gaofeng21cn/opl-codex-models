@@ -1,4 +1,5 @@
 @testable import CodexModelCore
+@testable import CodexModelManager
 import Foundation
 import XCTest
 
@@ -62,6 +63,24 @@ final class CatalogSyncServiceTests: XCTestCase {
                 .split(separator: "\n").count,
             2
         )
+
+        let sourceBeforeEdit = try Data(contentsOf: custom)
+        let settings = ReasoningSettings(supportedEfforts: ["low", "high", "max"], defaultEffort: "high")
+        try CatalogDataService(paths: paths).updateReasoning(settings, for: "vendor-model")
+        let backups = try FileManager.default.contentsOfDirectory(at: paths.backupDirectory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("custom-models.") }
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(backups.first)), sourceBeforeEdit)
+        XCTAssertEqual(try service.syncAndAppendLog().status, "updated")
+        let parsed = try CatalogParser.parseModels(customData: Data(contentsOf: custom), catalogData: Data(contentsOf: paths.mergedCatalog))
+        XCTAssertEqual(parsed.last?.reasoning, settings)
+        XCTAssertEqual(try service.syncAndAppendLog().status, "no_change")
+
+        let savedSource = try Data(contentsOf: custom)
+        XCTAssertThrowsError(try CatalogDataService(paths: paths).updateReasoning(
+            ReasoningSettings(supportedEfforts: ["low"], defaultEffort: "max"), for: "vendor-model"
+        ))
+        XCTAssertEqual(try Data(contentsOf: custom), savedSource)
     }
 
     func testCodexConfigUpdatePreservesOtherTopLevelAndProfileValues() throws {

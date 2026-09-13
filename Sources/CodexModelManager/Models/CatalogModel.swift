@@ -23,6 +23,7 @@ struct CatalogModel: Identifiable, Hashable {
     let priority: Int?
     let visibility: String?
     let supportedInAPI: Bool
+    let reasoning: ReasoningSettings
     let source: Source
 
     var id: String { slug }

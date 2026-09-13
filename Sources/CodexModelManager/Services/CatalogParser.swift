@@ -27,6 +27,7 @@ enum CatalogParser {
                 priority: integer(raw["priority"]),
                 visibility: raw["visibility"] as? String,
                 supportedInAPI: raw["supported_in_api"] as? Bool ?? false,
+                reasoning: ReasoningSettings(model: raw),
                 source: customSlugs.contains(slug) ? .custom : .official
             )
         }

@@ -24,7 +24,13 @@ final class CatalogParserTests: XCTestCase {
                     "supports_image_detail_original": true,
                     "context_window": 262_144,
                     "max_context_window": 524_288,
-                    "priority": 20
+                    "priority": 20,
+                    "supported_reasoning_levels": [
+                        ["effort": "low", "description": "Low"],
+                        ["effort": "high", "description": "High"],
+                        ["effort": "max", "description": "Max"]
+                    ],
+                    "default_reasoning_level": "high"
                 ]
             ]
         ])
@@ -42,6 +48,8 @@ final class CatalogParserTests: XCTestCase {
         XCTAssertEqual(models[1].contextWindow, 262_144)
         XCTAssertEqual(models[1].maxContextWindow, 524_288)
         XCTAssertEqual(models[0].maxContextWindow, 800_000)
+        XCTAssertEqual(models[1].reasoning.supportedEfforts, ["low", "high", "max"])
+        XCTAssertEqual(models[1].reasoning.defaultEffort, "high")
     }
 
     func testParseRecordsSupportsTimestampedAndLegacyLines() {

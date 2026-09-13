@@ -60,7 +60,7 @@ test "$(/usr/bin/plutil -extract status raw -o - "$dist/app-notarization.json")"
 /bin/ln -s /Applications "$payload/Applications"
 /bin/rm -f "$dmg" "$checksum"
 /usr/bin/hdiutil create \
-    -volname "Codex Model Manager" \
+    -volname "Codex Models" \
     -srcfolder "$payload" \
     -ov \
     -format UDZO \

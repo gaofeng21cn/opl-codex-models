@@ -15,7 +15,9 @@ final class CustomModelEditorTests: XCTestCase {
                 "supports_image_detail_original": false,
                 "priority": 50,
                 "wire_api": "responses",
-                "supports_tools": true
+                "supports_tools": true,
+                "supported_reasoning_levels": [["effort": "high", "description": "Provider description"]],
+                "default_reasoning_level": "high"
             ]]
         ])
         var draft = NewModelDraft()
@@ -26,6 +28,7 @@ final class CustomModelEditorTests: XCTestCase {
         draft.contextWindow = 262_144
         draft.supportsImage = true
         draft.supportsOriginalImageDetail = true
+        draft.reasoning = ReasoningSettings(supportedEfforts: ["low", "high", "max"], defaultEffort: "max")
 
         let updated = try CustomModelEditor.adding(
             draft: draft,
@@ -49,6 +52,11 @@ final class CustomModelEditorTests: XCTestCase {
         XCTAssertEqual(added["priority"] as? Int, 51)
         XCTAssertEqual(added["wire_api"] as? String, "responses")
         XCTAssertEqual(added["supports_tools"] as? Bool, true)
+        let levels = try XCTUnwrap(added["supported_reasoning_levels"] as? [[String: String]])
+        XCTAssertEqual(levels.map { $0["effort"] }, ["low", "high", "max"])
+        XCTAssertEqual(levels[1]["description"], "Provider description")
+        XCTAssertEqual(added["default_reasoning_level"] as? String, "max")
+        XCTAssertEqual(models[0]["default_reasoning_level"] as? String, "high")
     }
 
     func testAddingRejectsDuplicateAndInvalidSlugs() throws {
@@ -101,7 +109,9 @@ final class CustomModelEditorTests: XCTestCase {
                 "input_modalities": ["text", "image"],
                 "supports_image_detail_original": true,
                 "priority": 1,
-                "wire_api": "responses"
+                "wire_api": "responses",
+                "supported_reasoning_levels": [["effort": "high", "description": "High"]],
+                "default_reasoning_level": "high"
             ]]
         ])
         var draft = NewModelDraft()
@@ -123,5 +133,67 @@ final class CustomModelEditorTests: XCTestCase {
         XCTAssertEqual(model["wire_api"] as? String, "responses")
         XCTAssertEqual(model["priority"] as? Int, 1000)
         XCTAssertEqual(model["visibility"] as? String, "list")
+        XCTAssertEqual(model["default_reasoning_level"] as? String, "high")
+        XCTAssertEqual((model["supported_reasoning_levels"] as? [[String: String]])?.first?["effort"], "high")
+    }
+
+    func testEditingReasoningPreservesOtherModelsAndUnknownMetadata() throws {
+        let target: [String: Any] = [
+            "slug": "vendor-model",
+            "input_modalities": ["text", "image"],
+            "context_window": 1_048_576,
+            "provider_metadata": ["tools": ["custom-function"]],
+            "supported_reasoning_levels": [
+                ["effort": "high", "description": "Provider high", "budget": 200],
+                ["effort": "future", "description": "Future provider effort", "budget": 400]
+            ],
+            "default_reasoning_level": "high"
+        ]
+        let other: [String: Any] = ["slug": "other", "default_reasoning_level": "medium"]
+        let source = try JSONSerialization.data(withJSONObject: ["schema": "future.v2", "models": [target, other]])
+        let settings = ReasoningSettings(supportedEfforts: ["low", "high", "future"], defaultEffort: "future")
+        let updated = try CustomModelEditor.updatingReasoning(settings, for: "vendor-model", in: source)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        let models = try XCTUnwrap(root["models"] as? [[String: Any]])
+        XCTAssertEqual(root["schema"] as? String, "future.v2")
+        XCTAssertEqual(models[1] as NSDictionary, other as NSDictionary)
+        var remaining = models[0]
+        var original = target
+        for key in ["supported_reasoning_levels", "default_reasoning_level"] {
+            remaining.removeValue(forKey: key)
+            original.removeValue(forKey: key)
+        }
+        XCTAssertEqual(remaining as NSDictionary, original as NSDictionary)
+        let levels = try XCTUnwrap(models[0]["supported_reasoning_levels"] as? [[String: Any]])
+        XCTAssertEqual(levels.map { $0["effort"] as? String }, settings.supportedEfforts)
+        XCTAssertEqual(levels[2] as NSDictionary, (target["supported_reasoning_levels"] as! [[String: Any]])[1] as NSDictionary)
+        XCTAssertEqual(models[0]["default_reasoning_level"] as? String, "future")
+    }
+
+    func testEditingRejectsInvalidSettingsAndModelsOutsideCustomSource() throws {
+        let source = try JSONSerialization.data(withJSONObject: ["models": [["slug": "vendor-model"]]])
+        for settings in [
+            ReasoningSettings(),
+            ReasoningSettings(supportedEfforts: ["low", "high"], defaultEffort: "max"),
+            ReasoningSettings(supportedEfforts: ["high", "high"], defaultEffort: "high")
+        ] {
+            XCTAssertThrowsError(try CustomModelEditor.updatingReasoning(settings, for: "vendor-model", in: source))
+        }
+        XCTAssertThrowsError(try CustomModelEditor.updatingReasoning(
+            ReasoningSettings(supportedEfforts: ["high"], defaultEffort: "high"), for: "gpt-official", in: source
+        ))
+    }
+
+    func testRemovingDefaultSelectsRemainingEffortAndEmptySelectionIsInvalid() {
+        var settings = ReasoningSettings(supportedEfforts: ["low", "high", "max"], defaultEffort: "high")
+        settings.setEnabled(false, for: "high")
+        XCTAssertEqual(settings.defaultEffort, "max")
+        settings.setEnabled(false, for: "max")
+        XCTAssertEqual(settings.defaultEffort, "low")
+        settings.setEnabled(false, for: "low")
+        XCTAssertFalse(settings.isValid)
+        settings.setEnabled(true, for: "high")
+        XCTAssertEqual(settings.defaultEffort, "high")
+        XCTAssertTrue(settings.isValid)
     }
 }

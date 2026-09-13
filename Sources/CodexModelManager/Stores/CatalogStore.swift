@@ -8,6 +8,7 @@ final class CatalogStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var isSyncing = false
     @Published private(set) var isAddingModel = false
+    @Published private(set) var isSavingReasoning = false
     @Published private(set) var isApplyingConfiguration = false
     @Published var errorMessage: String?
     @Published var isPresentingAddModel = false
@@ -19,7 +20,7 @@ final class CatalogStore: ObservableObject {
     private var configurationErrorMessage: String?
 
     var isConfigured: Bool { service != nil }
-    var isBusy: Bool { isSyncing || isAddingModel || isApplyingConfiguration }
+    var isBusy: Bool { isSyncing || isAddingModel || isSavingReasoning || isApplyingConfiguration }
 
     init(configurationURL: URL = AppConfiguration.defaultURL) {
         self.configurationURL = configurationURL
@@ -139,6 +140,24 @@ final class CatalogStore: ObservableObject {
 
     func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func updateReasoning(_ settings: ReasoningSettings, for slug: String) async -> Bool {
+        guard !isBusy, let service else { return false }
+        isSavingReasoning = true
+        defer { isSavingReasoning = false }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try service.updateReasoning(settings, for: slug)
+                try service.runSync()
+            }.value
+            await refresh()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            await refresh()
+            return false
+        }
     }
 
     func setVisibility(_ visibility: ModelVisibility?, for slug: String) async {
