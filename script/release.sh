@@ -18,12 +18,12 @@ for variable_name in SIGNING_IDENTITY APPLE_ID APPLE_ID_PASSWORD TEAM_ID; do
 done
 
 dist="$project_root/dist"
-dmg="$dist/Codex-Model-Manager.dmg"
+dmg="$dist/Codex-Models.dmg"
 checksum="$dmg.sha256"
 staging="$(/usr/bin/mktemp -d /tmp/codex-model-manager-release.XXXXXX)"
 payload="$staging/payload"
 app="$payload/CodexModelManager.app"
-staged_dmg="$staging/Codex-Model-Manager.dmg"
+staged_dmg="$staging/Codex-Models.dmg"
 trap '/bin/rm -rf -- "$staging"' EXIT
 /bin/mkdir -p "$dist" "$payload"
 /bin/rm -rf "$dist/CodexModelManager.app"

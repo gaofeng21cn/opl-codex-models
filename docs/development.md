@@ -34,8 +34,11 @@ GUI 和同步 helper 复用 `Sources/CodexModelCore`。排查模型合并与设�
 和 hardened runtime，分别公证并装订 App 与 DMG，再生成 SHA-256 文件。
 签名与公证凭据通过环境提供，不写入文档、日志或仓库。
 
-产物位于 `dist/`。这个脚本生成并验证产物，不创建 GitHub Release；发布状态以
+产物为 `dist/Codex-Models.dmg` 和对应的 SHA-256 文件。这个脚本生成并验证产物，不创建 GitHub Release；发布状态以
 实际 owner release 和下载字节回读为准。Homebrew Tap 只从该 release 投影 Cask。
+
+对外名称统一为 Codex Models，仓库和 Homebrew 安装名均为 `opl-codex-models`。
+应用包内的可执行文件、bundle ID、配置目录和后台任务标识沿用原值，确保现有安装和每日同步兼容。
 
 ## 文档维护
 
