@@ -7,5 +7,6 @@
   "launchAgentPlistPath": "~/Library/LaunchAgents/com.onepersonlab.codex-model-manager.sync.plist",
   "mergedCatalogPath": "~/.codex/models.json",
   "syncLogPath": "~/Library/Logs/CodexModelManager/sync.jsonl",
-  "visibilityOverrides": {}
+  "visibilityOverrides": {},
+  "modelOverrides": {}
 }

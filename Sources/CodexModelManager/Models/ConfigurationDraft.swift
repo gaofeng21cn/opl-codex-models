@@ -11,6 +11,7 @@ struct ConfigurationDraft: Equatable {
     var launchAgentLabel = ""
     var backupDirectoryPath = ""
     var visibilityOverrides: [String: ModelVisibility] = [:]
+    var modelOverrides: [String: ModelFieldOverrides] = [:]
 
     init() {}
 
@@ -24,6 +25,7 @@ struct ConfigurationDraft: Equatable {
         launchAgentLabel = configuration.launchAgentLabel
         backupDirectoryPath = configuration.backupDirectoryPath
         visibilityOverrides = configuration.visibilityOverrides ?? [:]
+        modelOverrides = configuration.modelOverrides ?? [:]
     }
 
     var configuration: AppConfiguration {
@@ -36,7 +38,8 @@ struct ConfigurationDraft: Equatable {
             launchAgentPlistPath: launchAgentPlistPath,
             launchAgentLabel: launchAgentLabel,
             backupDirectoryPath: backupDirectoryPath,
-            visibilityOverrides: visibilityOverrides
+            visibilityOverrides: visibilityOverrides,
+            modelOverrides: modelOverrides
         )
     }
 

@@ -23,6 +23,7 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertEqual(paths.mergedCatalog.path, "/var/tmp/models.json")
         XCTAssertEqual(paths.launchAgentLabel, "com.example.model-catalog-sync")
         XCTAssertTrue(paths.visibilityOverrides.isEmpty)
+        XCTAssertTrue(paths.modelOverrides.isEmpty)
         XCTAssertEqual(
             paths.backupDirectory.path,
             "/tmp/codex-model-manager-home/.codex/backups/model-catalog"
@@ -49,6 +50,26 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try AppConfiguration.load(from: configurationURL)) { error in
             XCTAssertTrue(error.localizedDescription.contains("尚未找到本机配置"))
         }
+    }
+
+    func testSettingsRoundTripPreservesSparseOverridesAndVisibility() throws {
+        let url = try makeConfiguration(customSourcePath: "~/.codex/custom-models.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        var configuration = try AppConfiguration.read(from: url)
+        configuration.visibilityOverrides = ["official": .list]
+        configuration.modelOverrides = ["official": ModelFieldOverrides(contextWindow: 393_216)]
+        let draft = ConfigurationDraft(configuration: configuration)
+        try draft.configuration.save(to: url)
+        XCTAssertEqual(try AppConfiguration.read(from: url), configuration)
+        XCTAssertEqual(try AppConfiguration.load(from: url).modelOverrides, configuration.modelOverrides)
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let overrides = root["modelOverrides"] as! [String: [String: Int]]
+        XCTAssertEqual(overrides["official"], ["context_window": 393_216])
+        let data = Data(#"{"context_window":12,"input_modalities":["image"],"priority":99}"#.utf8)
+        let allowed = try JSONDecoder().decode(ModelFieldOverrides.self, from: data)
+        XCTAssertEqual(allowed.fields, ["context_window": 12])
+        XCTAssertThrowsError(try ModelFieldOverrides(contextWindow: -1).validate())
+        XCTAssertThrowsError(try ModelFieldOverrides(contextWindow: 20, maxContextWindow: 10).validate())
     }
 
     private func makeConfiguration(customSourcePath: String) throws -> URL {

@@ -10,6 +10,7 @@ public struct CatalogPaths: Equatable, Sendable {
     public let launchAgentLabel: String
     public let backupDirectory: URL
     public let visibilityOverrides: [String: ModelVisibility]
+    public let modelOverrides: [String: ModelFieldOverrides]
 
     public init(
         codexRuntime: URL,
@@ -20,7 +21,8 @@ public struct CatalogPaths: Equatable, Sendable {
         launchAgentPlist: URL,
         launchAgentLabel: String,
         backupDirectory: URL,
-        visibilityOverrides: [String: ModelVisibility] = [:]
+        visibilityOverrides: [String: ModelVisibility] = [:],
+        modelOverrides: [String: ModelFieldOverrides] = [:]
     ) {
         self.codexRuntime = codexRuntime
         self.customSource = customSource
@@ -31,6 +33,7 @@ public struct CatalogPaths: Equatable, Sendable {
         self.launchAgentLabel = launchAgentLabel
         self.backupDirectory = backupDirectory
         self.visibilityOverrides = visibilityOverrides
+        self.modelOverrides = modelOverrides
     }
 }
 
@@ -44,6 +47,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var launchAgentLabel: String
     public var backupDirectoryPath: String
     public var visibilityOverrides: [String: ModelVisibility]?
+    public var modelOverrides: [String: ModelFieldOverrides]?
 
     public init(
         codexRuntimePath: String?,
@@ -54,7 +58,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         launchAgentPlistPath: String,
         launchAgentLabel: String,
         backupDirectoryPath: String,
-        visibilityOverrides: [String: ModelVisibility]? = nil
+        visibilityOverrides: [String: ModelVisibility]? = nil,
+        modelOverrides: [String: ModelFieldOverrides]? = nil
     ) {
         self.codexRuntimePath = codexRuntimePath
         self.customSourcePath = customSourcePath
@@ -65,6 +70,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         self.launchAgentLabel = launchAgentLabel
         self.backupDirectoryPath = backupDirectoryPath
         self.visibilityOverrides = visibilityOverrides
+        self.modelOverrides = modelOverrides
     }
 
     public static var defaultURL: URL {
@@ -155,7 +161,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
                 field: "backupDirectoryPath",
                 homeDirectory: homeDirectory
             ),
-            visibilityOverrides: visibilityOverrides ?? [:]
+            visibilityOverrides: visibilityOverrides ?? [:],
+            modelOverrides: modelOverrides ?? [:]
         )
     }
 

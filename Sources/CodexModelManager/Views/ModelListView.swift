@@ -103,6 +103,7 @@ private struct ModelDetailView: View {
     @ObservedObject var store: CatalogStore
     let model: CatalogModel?
     @State private var isEditingReasoning = false
+    @State private var isEditingContext = false
 
     var body: some View {
         if let model {
@@ -135,7 +136,14 @@ private struct ModelDetailView: View {
                     DetailRow(title: "输入能力", value: model.modalitiesLabel)
                     DetailRow(title: "当前上下文", value: AppFormatters.tokenCount(model.contextWindow))
                     DetailRow(title: "最大上下文", value: AppFormatters.tokenCount(model.maxContextWindow))
-                    DetailRow(title: "上下文来源", value: model.contextSourceTitle)
+                    DetailRow(title: "上下文来源", value: contextSourceTitle(for: model))
+                    if model.source == .official {
+                        Button("编辑上下文覆盖…") { isEditingContext = true }
+                            .sheet(isPresented: $isEditingContext) {
+                                EditContextOverrideView(store: store, model: model)
+                            }
+                            .disabled(store.isBusy)
+                    }
                     DetailRow(
                         title: "推理档位",
                         value: model.reasoning.supportedEfforts.isEmpty
@@ -176,6 +184,18 @@ private struct ModelDetailView: View {
             }
         } else {
             ContentUnavailableView("没有模型", systemImage: "square.stack.3d.up.slash")
+        }
+    }
+
+    private func contextSourceTitle(for model: CatalogModel) -> String {
+        guard model.source == .official,
+              let override = store.configuration?.modelOverrides?[model.slug], !override.isEmpty else {
+            return model.contextSourceTitle
+        }
+        switch (override.contextWindow != nil, override.maxContextWindow != nil) {
+        case (true, true): return "当前、最大上下文使用本机值"
+        case (true, false): return "当前上下文使用本机值；最大值跟随官方"
+        default: return "最大上下文使用本机值；当前值跟随官方"
         }
     }
 }

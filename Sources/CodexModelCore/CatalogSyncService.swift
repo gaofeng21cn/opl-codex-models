@@ -39,6 +39,7 @@ public struct CatalogSyncService: Sendable {
     }
 
     public func sync() throws -> CatalogSyncResult {
+        for override in paths.modelOverrides.values { try override.validate() }
         guard FileManager.default.isExecutableFile(atPath: paths.codexRuntime.path) else {
             throw CoreError.processFailed("Codex 运行时不可执行：\(paths.codexRuntime.path)")
         }
@@ -87,7 +88,8 @@ public struct CatalogSyncService: Sendable {
             throw CoreError.invalidCatalog("官方模型缺少数字 priority")
         }
 
-        bundledModels = bundledModels.map { model in
+        var appliedOverrides: [String: [String: Int]] = [:]
+        bundledModels = try bundledModels.map { model in
             var copy = model
             if copy["supports_reasoning_summaries"] == nil {
                 copy["supports_reasoning_summaries"] = true
@@ -97,6 +99,10 @@ public struct CatalogSyncService: Sendable {
             }
             if let slug = copy["slug"] as? String, let visibility = paths.visibilityOverrides[slug] {
                 copy["visibility"] = visibility.rawValue
+            }
+            if let slug = copy["slug"] as? String, let override = paths.modelOverrides[slug] {
+                copy = try override.applying(to: copy)
+                if !override.isEmpty { appliedOverrides[slug] = override.fields }
             }
             return copy
         }
@@ -154,6 +160,8 @@ public struct CatalogSyncService: Sendable {
             "catalog": paths.mergedCatalog.path,
             "bundled_count": bundledModels.count,
             "custom_count": prioritizedCustom.count,
+            "applied_model_overrides": appliedOverrides,
+            "inactive_model_overrides": paths.modelOverrides.keys.filter { !bundledSlugs.contains($0) }.sorted(),
             "current_hash": currentHash,
             "desired_hash": desiredHash,
             "backup_path": backupPath

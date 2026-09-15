@@ -172,6 +172,45 @@ final class CatalogStore: ObservableObject {
         }
     }
 
+    func setContextOverride(_ override: ModelFieldOverrides, for slug: String) async -> Bool {
+        guard !isBusy, snapshot.officialModels.contains(where: { $0.slug == slug }) else { return false }
+        isApplyingConfiguration = true
+        defer { isApplyingConfiguration = false }
+        do {
+            try override.validate()
+            var updated = try AppConfiguration.read(from: configurationURL)
+            var overrides = updated.modelOverrides ?? [:]
+            overrides[slug] = override.isEmpty ? nil : override
+            updated.modelOverrides = overrides
+            let configuration = updated
+            let configurationURL = configurationURL
+            let helperURL = Self.packagedHelperURL
+            let result = try await Task.detached(priority: .userInitiated) {
+                let paths = try configuration.resolved()
+                try FileManager.default.createDirectory(at: paths.backupDirectory, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(
+                    at: configurationURL,
+                    to: paths.backupDirectory.appendingPathComponent("app-config.\(UUID().uuidString).json")
+                )
+                return try SetupService().apply(
+                    configuration: configuration,
+                    configurationURL: configurationURL,
+                    helperURL: helperURL,
+                    updateCodexConfiguration: false,
+                    installDailySync: false
+                )
+            }.value
+            self.configuration = configuration
+            self.paths = result.paths
+            self.service = CatalogDataService(paths: result.paths)
+            await refresh()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     private static var packagedHelperURL: URL {
         Bundle.main.bundleURL
             .appendingPathComponent("Contents", isDirectory: true)
