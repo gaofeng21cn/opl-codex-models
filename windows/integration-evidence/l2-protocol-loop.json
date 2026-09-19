@@ -1,0 +1,138 @@
+{
+  "schema": "l2-protocol-loop/1",
+  "generated_at": "2026-09-19T14:37:58+0800",
+  "mode": "real-relay",
+  "upstream_host": "gflabtoken.cn",
+  "model": "deepseek-v4.1-flash",
+  "credential_source": "secret-tool",
+  "credential_loaded": true,
+  "tls_verification": "enabled",
+  "bridge_record_path": "/tmp/l2/evidence.jsonl",
+  "scenarios": [
+    {
+      "path": "additional_tools",
+      "effort": "low",
+      "turn1": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "client_stream_requested": true,
+        "bridge_call": {
+          "type": "custom_tool_call",
+          "name": "probe_echo"
+        },
+        "call_id_present": true,
+        "argument_matches": true
+      },
+      "execution": {
+        "executed": true,
+        "tool": "probe_echo",
+        "ok": true
+      },
+      "turn2": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "history_items_sent": [
+          "custom_tool_call",
+          "custom_tool_call_output"
+        ],
+        "echo_value_seen": true,
+        "text_preview": "The tool returned, verbatim:\n\n```\nPROBE_ECHO_OK:PING-L2\n```"
+      },
+      "closed_loop": true
+    },
+    {
+      "path": "top_level_tools",
+      "effort": "low",
+      "turn1": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "client_stream_requested": true,
+        "bridge_call": {
+          "type": "custom_tool_call",
+          "name": "probe_echo"
+        },
+        "call_id_present": true,
+        "argument_matches": true
+      },
+      "execution": {
+        "executed": true,
+        "tool": "probe_echo",
+        "ok": true
+      },
+      "turn2": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "history_items_sent": [
+          "custom_tool_call",
+          "custom_tool_call_output"
+        ],
+        "echo_value_seen": true,
+        "text_preview": "The tool returned exactly:\n\n```\nPROBE_ECHO_OK:PING-L2\n```"
+      },
+      "closed_loop": true
+    },
+    {
+      "path": "additional_tools",
+      "effort": "high",
+      "turn1": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "client_stream_requested": true,
+        "bridge_call": {
+          "type": "custom_tool_call",
+          "name": "probe_echo"
+        },
+        "call_id_present": true,
+        "argument_matches": true
+      },
+      "execution": {
+        "executed": true,
+        "tool": "probe_echo",
+        "ok": true
+      },
+      "turn2": {
+        "http_status": 200,
+        "sse_events": [
+          "response.created",
+          "response.output_item.added",
+          "response.output_item.added",
+          "response.completed"
+        ],
+        "history_items_sent": [
+          "custom_tool_call",
+          "custom_tool_call_output"
+        ],
+        "echo_value_seen": true,
+        "text_preview": "The tool returned exactly:\n\n```\nPROBE_ECHO_OK:PING-L2\n```"
+      },
+      "closed_loop": true,
+      "is_extra_effort": true
+    }
+  ]
+}

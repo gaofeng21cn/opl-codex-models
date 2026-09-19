@@ -1,0 +1,29 @@
+{
+  "evidence_source": "reviewer-direct-wsl-execution",
+  "evidence_note": "由审查者直接在 WSL 内执行内部隔离探针获得，不是 Windows->wsl.exe 调用链的结果。Windows 链路需运行同目录 probe_wsl_compat.py 验证。",
+  "probe_scheme": "reviewer-direct-wsl-v1",
+  "runtime": {
+    "path_linux": "/mnt/c/Users/MECHREVO/.codex/bin/wsl/385b74eb4db8c237/codex",
+    "distro": "Ubuntu",
+    "sha256": "b544b069ae61d5e68e1d66cd5dbecbe8f975de5d57235150ceeb2cb2da3cd82e",
+    "version": "codex-cli 0.155.0-alpha.9"
+  },
+  "positive_control": {
+    "description": "隔离 CODEX_HOME 中写入 model_catalog_json 指向含唯一测试 slug 的 catalog，debug models 返回该 slug",
+    "exit_code": 0,
+    "marker_loaded": true,
+    "model_count": 1
+  },
+  "negative_control_bundled": {
+    "description": "测试 slug 不存在于 bundled 目录",
+    "marker_absent_from_bundled": true
+  },
+  "negative_control_missing_catalog": {
+    "description": "model_catalog_json 指向不存在的文件时 debug models 退出非零",
+    "missing_catalog_exit_code": 1
+  },
+  "stderr_summary": "",
+  "credentials": "未复制、未输出。探测使用隔离 HOME/CODEX_HOME/cwd，未调用模型推理接口。",
+  "reference_script": "internal probe (not included in the public release)",
+  "reference_evidence": "outputs/WSL-Codex接口验证结果.json"
+}

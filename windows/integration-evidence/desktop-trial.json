@@ -1,0 +1,615 @@
+{
+ "bridge_scope": [
+  "deepseek-v4.1-flash"
+ ],
+ "credential": {
+  "handling": "captured in-process, exported to the child env only",
+  "old_value_read_back": false,
+  "persisted": false,
+  "printed": false,
+  "source": "secret-tool (the Codex entry the client itself uses)"
+ },
+ "generated_at": "2026-09-19T15:13:08+0800",
+ "high_effort_separate_session": {
+  "agent_message_chars": 307,
+  "codex_exit_code": 0,
+  "commands": [
+   {
+    "exit_code": 0,
+    "output_bytes": 344,
+    "output_contains_expected_token": false,
+    "status": "completed"
+   },
+   {
+    "exit_code": 0,
+    "output_bytes": 5,
+    "output_contains_expected_token": true,
+    "status": "completed"
+   }
+  ],
+  "effort": "high",
+  "executed_command_count": 2,
+  "expected_file_content": "world",
+  "file_matches_expected": true,
+  "observed_file_content_after_round": "world",
+  "reasoning_item_count": 2,
+  "round": 5,
+  "thread_hash": "5624a3f716ae",
+  "usage": {
+   "cache_write_input_tokens": 0,
+   "cached_input_tokens": 0,
+   "input_tokens": 35173,
+   "output_tokens": 346,
+   "reasoning_output_tokens": 0
+  }
+ },
+ "isolation": {
+  "codex_home": "/tmp/desktop-trial/home (created per run)",
+  "dedicated_work_dir": "/tmp/desktop-trial/dedicated",
+  "real_global_config_sha256": "1a9e46e6dd22e80a204976b8755d6384da7f6f145ed1f6e0988b3ccb10468245",
+  "real_global_config_written": false
+ },
+ "low_effort_rounds": [
+  {
+   "agent_message_chars": 457,
+   "codex_exit_code": 0,
+   "commands": [
+    {
+     "exit_code": 0,
+     "output_bytes": 278,
+     "output_contains_expected_token": null,
+     "status": "completed"
+    }
+   ],
+   "effort": "low",
+   "executed_command_count": 1,
+   "expected_file_content": null,
+   "file_matches_expected": null,
+   "observed_file_content_after_round": null,
+   "reasoning_item_count": 1,
+   "round": 1,
+   "thread_hash": "524276920e85",
+   "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 23207,
+    "output_tokens": 286,
+    "reasoning_output_tokens": 0
+   }
+  },
+  {
+   "agent_message_chars": 189,
+   "codex_exit_code": 0,
+   "commands": [
+    {
+     "exit_code": 0,
+     "output_bytes": 0,
+     "output_contains_expected_token": null,
+     "status": "completed"
+    },
+    {
+     "exit_code": 0,
+     "output_bytes": 103,
+     "output_contains_expected_token": null,
+     "status": "completed"
+    }
+   ],
+   "effort": "low",
+   "executed_command_count": 2,
+   "expected_file_content": "hello",
+   "file_matches_expected": true,
+   "observed_file_content_after_round": "hello",
+   "reasoning_item_count": 0,
+   "round": 2,
+   "thread_hash": "524276920e85",
+   "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 47379,
+    "output_tokens": 479,
+    "reasoning_output_tokens": 0
+   }
+  },
+  {
+   "agent_message_chars": 82,
+   "codex_exit_code": 0,
+   "commands": [
+    {
+     "exit_code": 0,
+     "output_bytes": 36,
+     "output_contains_expected_token": true,
+     "status": "completed"
+    }
+   ],
+   "effort": "low",
+   "executed_command_count": 1,
+   "expected_file_content": "hello",
+   "file_matches_expected": true,
+   "observed_file_content_after_round": "hello",
+   "reasoning_item_count": 1,
+   "round": 3,
+   "thread_hash": "524276920e85",
+   "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 72076,
+    "output_tokens": 580,
+    "reasoning_output_tokens": 0
+   }
+  },
+  {
+   "agent_message_chars": 166,
+   "codex_exit_code": 0,
+   "commands": [
+    {
+     "exit_code": 0,
+     "output_bytes": 0,
+     "output_contains_expected_token": false,
+     "status": "completed"
+    },
+    {
+     "exit_code": 0,
+     "output_bytes": 41,
+     "output_contains_expected_token": true,
+     "status": "completed"
+    }
+   ],
+   "effort": "low",
+   "executed_command_count": 2,
+   "expected_file_content": "world",
+   "file_matches_expected": true,
+   "observed_file_content_after_round": "world",
+   "reasoning_item_count": 1,
+   "round": 4,
+   "thread_hash": "524276920e85",
+   "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 97228,
+    "output_tokens": 769,
+    "reasoning_output_tokens": 0
+   }
+  }
+ ],
+ "low_effort_same_conversation": true,
+ "mode": "real relay + real Codex client runtime + model-scoped bridge",
+ "passthrough_probe": {
+  "bridge_record": {
+   "client_stream": false,
+   "error": null,
+   "mode": "passthrough",
+   "model": "gpt-6-astra",
+   "route": "/responses",
+   "ts": "2026-09-19T15:11:30+0800"
+  },
+  "credential_loaded": true,
+  "direct": {
+   "parsed": true,
+   "status": 200,
+   "text_preview": "pong",
+   "top_level_keys": [
+    "background",
+    "completed_at",
+    "created_at",
+    "error",
+    "frequency_penalty",
+    "id",
+    "incomplete_details",
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "metadata",
+    "model",
+    "moderation",
+    "object",
+    "output",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "previous_response_id",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "reasoning",
+    "safety_identifier",
+    "service_tier",
+    "status",
+    "store",
+    "temperature",
+    "text",
+    "tool_choice",
+    "tool_usage",
+    "tools",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "usage",
+    "user"
+   ]
+  },
+  "model": "gpt-6-astra",
+  "verdict": "passthrough_ok",
+  "via_bridge": {
+   "parsed": true,
+   "status": 200,
+   "text_preview": "pong",
+   "top_level_keys": [
+    "background",
+    "completed_at",
+    "created_at",
+    "error",
+    "frequency_penalty",
+    "id",
+    "incomplete_details",
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "metadata",
+    "model",
+    "moderation",
+    "object",
+    "output",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "previous_response_id",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "reasoning",
+    "safety_identifier",
+    "service_tier",
+    "status",
+    "store",
+    "temperature",
+    "text",
+    "tool_choice",
+    "tool_usage",
+    "tools",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "usage",
+    "user"
+   ]
+  }
+ },
+ "profile_probe": {
+  "base_layer_hits": [],
+  "command": "/mnt/c/Users/MECHREVO/.codex/bin/wsl/25409a2a67180a62/codex exec --profile probe --skip-git-repo-check -s …",
+  "exit_code": 1,
+  "profile_layer_hits": [
+   {
+    "has_authorization": true,
+    "model": "deepseek-v4.1-flash",
+    "path": "/responses"
+   }
+  ],
+  "stderr_tail": [
+   "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/profile-probe/home\"))",
+   "Reading additional input from stdin..."
+  ],
+  "verdict": "profile_layer_wins"
+ },
+ "protocol_calls": {
+  "bridge_request_count": 12,
+  "declaration_paths_observed": [
+   "additional_tools"
+  ],
+  "diagnostics_total": 0,
+  "passthrough_request_count": 1,
+  "requests": [
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "b3f435e9",
+      "name": "exec",
+      "payload_len": 112,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "b3f435e9",
+      "name": "exec",
+      "payload_len": 131,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [],
+    "upstream_calls": []
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "c7fcebc2",
+      "name": "exec",
+      "payload_len": 335,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "c7fcebc2",
+      "name": "exec",
+      "payload_len": 364,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [],
+    "upstream_calls": []
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "ac52c6c3",
+      "name": "exec",
+      "payload_len": 127,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "ac52c6c3",
+      "name": "exec",
+      "payload_len": 146,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [],
+    "upstream_calls": []
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "b1f9ca7d",
+      "name": "exec",
+      "payload_len": 310,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "b1f9ca7d",
+      "name": "exec",
+      "payload_len": 339,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [],
+    "upstream_calls": []
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "025edfa4",
+      "name": "exec",
+      "payload_len": 112,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "025edfa4",
+      "name": "exec",
+      "payload_len": 131,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [
+     {
+      "call_ref": "be8035ea",
+      "name": "exec",
+      "payload_len": 141,
+      "type": "custom_tool_call"
+     }
+    ],
+    "upstream_calls": [
+     {
+      "call_ref": "be8035ea",
+      "name": "exec",
+      "payload_len": 160,
+      "type": "function_call"
+     }
+    ]
+   },
+   {
+    "client_events": [
+     "response.created",
+     "response.in_progress",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.output_item.added",
+     "response.output_item.done",
+     "response.completed"
+    ],
+    "client_stream": true,
+    "declared_sources": [
+     "additional_tools"
+    ],
+    "diagnostics": [],
+    "http_status": 200,
+    "mode": "translate",
+    "model": "deepseek-v4.1-flash",
+    "translated_calls": [],
+    "upstream_calls": []
+   },
+   {
+    "client_stream": false,
+    "error": null,
+    "mode": "passthrough",
+    "model": "gpt-6-astra"
+   }
+  ],
+  "translated_request_count": 11
+ },
+ "schema": "desktop-trial/1",
+ "target_model": "deepseek-v4.1-flash",
+ "upstream_host": "gflabtoken.cn"
+}

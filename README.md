@@ -11,6 +11,10 @@
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-6C757D?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更高版本">
 </p>
 
+## Windows 版（本 fork）
+
+Python/tkinter Windows 实现位于 [windows/](windows/README.md)，包含模型目录管理、可选本地 Responses 桥与只读诊断。安装与使用请查看该目录的 README；以下说明适用于原 macOS 版。
+
 ## 安装
 
 推荐使用 Homebrew：

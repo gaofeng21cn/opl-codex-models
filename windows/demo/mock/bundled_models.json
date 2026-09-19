@@ -1,0 +1,42 @@
+{
+  "models": [
+    {
+      "slug": "gpt-6-astra",
+      "display_name": "GPT-6-Astra",
+      "description": "Our most capable model for complex, demanding work.",
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast responses with lighter reasoning"},
+        {"effort": "medium", "description": "Balanced speed and depth"},
+        {"effort": "high", "description": "Greater reasoning depth"},
+        {"effort": "xhigh", "description": "Extra high reasoning depth"},
+        {"effort": "max", "description": "Maximum reasoning depth"}
+      ],
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "context_window": 400000,
+      "max_context_window": 800000,
+      "input_modalities": ["text", "image"],
+      "supports_image_detail_original": true,
+      "future_metadata": {"version": 1}
+    },
+    {
+      "slug": "gpt-5-codex",
+      "display_name": "GPT-5-Codex",
+      "description": "Fast, efficient coding model.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast"},
+        {"effort": "medium", "description": "Balanced"},
+        {"effort": "high", "description": "Deeper"}
+      ],
+      "visibility": "hide",
+      "supported_in_api": true,
+      "priority": 2,
+      "context_window": 200000,
+      "max_context_window": 400000,
+      "input_modalities": ["text"]
+    }
+  ]
+}

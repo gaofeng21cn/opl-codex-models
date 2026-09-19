@@ -1,0 +1,523 @@
+{
+ "acceptance_file": {
+  "final_bytes": 5,
+  "final_content": "world",
+  "final_exists": true,
+  "path": "/tmp/l2codex/work/probe_hello.txt"
+ },
+ "bridge_requests": [
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 1,
+   "translated_calls": [
+    {
+     "call_ref": "4504b8f3",
+     "name": "exec",
+     "payload_len": 101,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "4504b8f3",
+     "name": "exec",
+     "payload_len": 120,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 2,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 3,
+   "translated_calls": [
+    {
+     "call_ref": "b5d60089",
+     "name": "exec",
+     "payload_len": 174,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "b5d60089",
+     "name": "exec",
+     "payload_len": 193,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 4,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 5,
+   "translated_calls": [
+    {
+     "call_ref": "643cf14a",
+     "name": "exec",
+     "payload_len": 148,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "643cf14a",
+     "name": "exec",
+     "payload_len": 167,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 6,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 7,
+   "translated_calls": [
+    {
+     "call_ref": "657dbfd5",
+     "name": "exec",
+     "payload_len": 175,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "657dbfd5",
+     "name": "exec",
+     "payload_len": 194,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "client_stream": true,
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "http_status": 200,
+   "n": 8,
+   "translated_calls": [],
+   "upstream_calls": []
+  }
+ ],
+ "capture": [
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 1,
+   "translated_calls": [
+    {
+     "call_ref": "4504b8f3",
+     "name": "exec",
+     "payload_len": 101,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "4504b8f3",
+     "name": "exec",
+     "payload_len": 120,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 2,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 3,
+   "translated_calls": [
+    {
+     "call_ref": "b5d60089",
+     "name": "exec",
+     "payload_len": 174,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "b5d60089",
+     "name": "exec",
+     "payload_len": 193,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 4,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 5,
+   "translated_calls": [
+    {
+     "call_ref": "643cf14a",
+     "name": "exec",
+     "payload_len": 148,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "643cf14a",
+     "name": "exec",
+     "payload_len": 167,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 6,
+   "translated_calls": [],
+   "upstream_calls": []
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 7,
+   "translated_calls": [
+    {
+     "call_ref": "657dbfd5",
+     "name": "exec",
+     "payload_len": 175,
+     "type": "custom_tool_call"
+    }
+   ],
+   "upstream_calls": [
+    {
+     "call_ref": "657dbfd5",
+     "name": "exec",
+     "payload_len": 194,
+     "type": "function_call"
+    }
+   ]
+  },
+  {
+   "client_events": [
+    "response.created",
+    "response.in_progress",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+   ],
+   "declared_sources": [
+    "additional_tools"
+   ],
+   "diagnostics": [],
+   "index": 8,
+   "translated_calls": [],
+   "upstream_calls": []
+  }
+ ],
+ "client": "codex 0.155.0-alpha.9.2 (WSL, isolated CODEX_HOME)",
+ "credential": {
+  "injected_via": "child process environment (env_key), never argv/logs/files",
+  "source": "secret-tool (existing authorized Codex entry)",
+  "tls_verification": "enabled"
+ },
+ "declaration_path_observed": [
+  "additional_tools"
+ ],
+ "generated_at": "2026-09-19T14:51:44+0800",
+ "isolation": {
+  "codex_home": "/tmp/l2codex/home (created and removed per run)",
+  "real_global_config_written": false,
+  "work_dir": "/tmp/l2codex/work"
+ },
+ "mode": "real-relay + real-codex",
+ "model": "deepseek-v4.1-flash",
+ "real_config_sha256": "1a9e46e6dd22e80a204976b8755d6384da7f6f145ed1f6e0988b3ccb10468245",
+ "reasoning_effort": "low",
+ "rounds": [
+  {
+   "codex_exit_code": 0,
+   "executed_command_count": 1,
+   "expected_token": null,
+   "final_message_present": true,
+   "items": [
+    {
+     "exit_code": 0,
+     "output_bytes": 278,
+     "status": "completed",
+     "type": "command_execution"
+    },
+    {
+     "type": "reasoning"
+    },
+    {
+     "text_chars": 417,
+     "type": "agent_message"
+    }
+   ],
+   "round": 1
+  },
+  {
+   "codex_exit_code": 0,
+   "executed_command_count": 1,
+   "expected_token": "hello",
+   "final_message_present": true,
+   "items": [
+    {
+     "exit_code": 0,
+     "output_bytes": 98,
+     "status": "completed",
+     "type": "command_execution"
+    },
+    {
+     "type": "reasoning"
+    },
+    {
+     "text_chars": 311,
+     "type": "agent_message"
+    }
+   ],
+   "round": 2
+  },
+  {
+   "codex_exit_code": 0,
+   "executed_command_count": 1,
+   "expected_token": "hello",
+   "final_message_present": true,
+   "items": [
+    {
+     "exit_code": 0,
+     "output_bytes": 8,
+     "status": "completed",
+     "type": "command_execution"
+    },
+    {
+     "type": "reasoning"
+    },
+    {
+     "text_chars": 250,
+     "type": "agent_message"
+    }
+   ],
+   "round": 3
+  },
+  {
+   "codex_exit_code": 0,
+   "executed_command_count": 1,
+   "expected_token": "world",
+   "final_message_present": true,
+   "items": [
+    {
+     "exit_code": 0,
+     "output_bytes": 38,
+     "status": "completed",
+     "type": "command_execution"
+    },
+    {
+     "type": "reasoning"
+    },
+    {
+     "text_chars": 285,
+     "type": "agent_message"
+    }
+   ],
+   "round": 4
+  }
+ ],
+ "schema": "l2-codex-acceptance/1",
+ "upstream_host": "gflabtoken.cn"
+}
