@@ -9,10 +9,11 @@ $env:PYTHONPATH = (Join-Path (Get-Location) "src")
 & ".\.venv\Scripts\python.exe" -m pytest ".\tests" -q -rs
 powershell -ExecutionPolicy Bypass -File .\scripts\offline_demo.ps1
 & ".\.venv\Scripts\python.exe" .\scripts\bridge_l1_e2e.py
+& ".\.venv\Scripts\python.exe" .\scripts\gui_takeover_smoke.py
 ```
 
 验收标准：Windows 测试全部通过；受限机器无法创建符号链接时，相关用例允许按平台跳过；
-离线 demo 输出 `SIMULATED`；桥 L1 输出全部 `PASS`。
+离线 demo 输出 `SIMULATED`；桥 L1 与接管 GUI 冒烟输出 `PASS`。
 
 发布前检查：
 
@@ -22,5 +23,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\offline_demo.ps1
   配置。
 - `demo/probe/bundled_models_wsl.json` 是脱敏结构样例，不是用户运行时导出物。
 - 真实 DeepSeek 中转和桌面 GUI 验收证据属于当前环境记录；换机器、运行时或中转后应重新验证。
+- 发布版不包含已退役的 `deepseek-delegation` MCP；DeepSeek 任务委派由独立的 `dsh` 集成负责。
 
 当前版本：`0.1.0` release candidate。

@@ -75,6 +75,8 @@ reported, never faked as success.
 
 from __future__ import annotations
 
+BRIDGE_VERSION = "2026.09.20.4"
+
 import json
 import http.client
 import queue
@@ -83,12 +85,15 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
+
+from .tool_recovery import policy, recover_context
 
 #: The only hosts the bridge may ever listen on.  Enforced in the data class and
 #: in :func:`run_bridge` so no caller (CLI, GUI, tests, scripts) can bind wider.
@@ -523,6 +528,9 @@ def _custom_call_from_function(item: dict, reg: ToolRegistration) -> dict:
 def _function_call_from_custom(item: dict) -> dict:
     result = dict(item)
     result["type"] = "function_call"
+    # Item IDs belong to the original wire type. Send inline history without
+    # that optional ID; call_id is the tool/result correlation and stays intact.
+    result.pop("id", None)
     value = result.pop("input", "")
     result["arguments"] = json.dumps(
         {"input": value if isinstance(value, str) else _json_text(value)},
@@ -558,6 +566,8 @@ def _transform_response(
         # Ordinary functions (wait, questions, etc.) need name restoration too.
         # Keep their type and arguments unchanged.
         result["name"] = registration.original_name
+        if registration.namespace:
+            result["namespace"] = registration.namespace
         return result
     return _custom_call_from_function(result, registration)
 
@@ -620,6 +630,7 @@ def translate_request(
         elif kind == "custom_tool_call_output":
             output = dict(item)
             output["type"] = "function_call_output"
+            output.pop("id", None)
             cleaned.append(output)
         else:
             cleaned.append(item)
@@ -658,6 +669,161 @@ def translate_response(
     )
 
 
+def compaction_reason(payload: dict, route: str) -> Optional[str]:
+    """Identify an active compact operation, never words in user/history text.
+
+    Responses-lite Codex appends compaction_trigger as the final input item.
+    A prior compaction/encrypted summary is ordinary conversation history and
+    must not disable tool translation on subsequent turns. Dedicated compact
+    endpoints also bypass both patches. Their opaque results are not tool calls.
+    """
+    if route in ("/responses/compact", "/v1/responses/compact"):
+        return "compact_endpoint"
+    items = payload.get("input")
+    if (isinstance(items, list) and items and isinstance(items[-1], dict)
+            and items[-1].get("type") == "compaction_trigger"):
+        return "compaction_trigger"
+    return None
+
+
+def normalize_deepseek_reasoning(payload):
+    """Adapt relay summary-only reasoning to DeepSeek's accepted content shape.
+
+    Keep the exact provided text and original summary. Do not manufacture text,
+    touch encrypted items or overwrite real content. Caller scopes this to the
+    explicit DeepSeek protocol adapter, never GPT or passthrough mode.
+    """
+    result = dict(payload)
+    count = 0
+    for field in ('input', 'output'):
+        items = payload.get(field)
+        if not isinstance(items, list): continue
+        converted = []
+        for item in items:
+            if (isinstance(item, dict) and item.get('type') == 'reasoning'
+                    and not item.get('content') and not item.get('encrypted_content')):
+                summary = item.get('summary')
+                if (isinstance(summary, list) and summary and all(
+                        isinstance(part, dict) and part.get('type') == 'summary_text'
+                        and isinstance(part.get('text'), str) for part in summary)):
+                    item = dict(item, content=[{'type': 'reasoning_text', 'text': part['text']} for part in summary])
+                    count += 1
+            converted.append(item)
+        result[field] = converted
+    return result, count
+
+
+def _reasoning_content(item):
+    content = item.get("content")
+    return (isinstance(content, list) and bool(content) and
+            any(isinstance(p, dict) and p.get("type") == "reasoning_text"
+                and isinstance(p.get("text"), str) and p["text"] for p in content))
+
+
+def reasoning_inventory(payload):
+    """Counts only; never expose text, IDs, arguments or encrypted state."""
+    items = payload.get("input", payload.get("output", []))
+    if not isinstance(items, list): return {}
+    reasoning = [x for x in items if isinstance(x, dict) and x.get("type") == "reasoning"]
+    return {"items": len(reasoning), "with_text": sum(_reasoning_content(x) for x in reasoning),
+            "without_text": sum(not _reasoning_content(x) for x in reasoning)}
+
+
+class ReasoningHistory:
+    """Bounded, memory-only repair of reasoning omitted from client history.
+
+    Match exact upstream reasoning IDs or assistant output anchors within an
+    auth+model owner. Existing client content always wins. No text is fabricated;
+    cache expiry/restart is deliberately not represented as successful recovery.
+    """
+    def __init__(self, max_bytes=8 * 1024 * 1024, ttl=3600):
+        self.items = OrderedDict()
+        self.max_bytes = max_bytes
+        self.ttl = ttl
+        self.size = 0
+        self.lock = threading.Lock()
+
+    def _put(self, key, value):
+        raw = json.dumps(value, ensure_ascii=False).encode()
+        if len(raw) > self.max_bytes: return
+        old = self.items.pop(key, None)
+        if old:
+            self.size -= len(old[1])
+            if old[1] != raw: raw = b"null"  # conflicting anchor: never guess
+        self.items[key] = (time.monotonic(), raw)
+        self.size += len(raw)
+        while self.size > self.max_bytes or len(self.items) > 4096:
+            _, (_, evicted) = self.items.popitem(last=False)
+            self.size -= len(evicted)
+
+    def _expire(self):
+        now = time.monotonic()
+        for key, (created, raw) in list(self.items.items()):
+            if now - created > self.ttl:
+                self.size -= len(raw)
+                del self.items[key]
+
+    def remember(self, owner, response):
+        body = response.get("response", response)
+        with self.lock:
+            self._expire()
+            reasoning = []
+            for item in body.get("output", []):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in ("function_call", "custom_tool_call", "message"):
+                    anchor_kind = "message" if item.get("type") == "message" else "call"
+                    anchor = item.get("id") if anchor_kind == "message" else item.get("call_id")
+                    if reasoning and isinstance(anchor, str) and anchor:
+                        self._put((owner, anchor_kind, anchor), reasoning)
+                    continue
+                if item.get("type") != "reasoning" or not _reasoning_content(item):
+                    continue
+                saved = {k: item[k] for k in ("type", "id", "content", "summary", "encrypted_content") if k in item}
+                reasoning.append(saved)
+                if not isinstance(item.get("id"), str) or not item["id"]:
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list) or not any(isinstance(p, dict) and p.get("type") == "reasoning_text" and isinstance(p.get("text"), str) for p in content):
+                    continue
+                self._put((owner, item["id"]), content)
+
+    def restore(self, owner, request):
+        items = request.get("input")
+        if not isinstance(items, list): return request, 0
+        restored = []; count = 0; segment_start = 0
+        with self.lock:
+            self._expire()
+            for item in items:
+                if isinstance(item, dict) and item.get("type") == "reasoning" and not _reasoning_content(item):
+                    cached = self.items.get((owner, item.get("id")))
+                    if cached and json.loads(cached[1]):
+                        item = dict(item, content=json.loads(cached[1]))
+                        count += 1
+                if isinstance(item, dict) and (item.get("type") in ("function_call", "custom_tool_call")
+                                               or item.get("role") == "assistant"):
+                    anchor_kind = "message" if item.get("role") == "assistant" else "call"
+                    anchor = item.get("id") if anchor_kind == "message" else item.get("call_id")
+                    cached = self.items.get((owner, anchor_kind, anchor)) if isinstance(anchor, str) else None
+                    saved = json.loads(cached[1]) if cached else None
+                    segment = restored[segment_start:]
+                    present = [(j, x) for j, x in enumerate(segment) if isinstance(x, dict) and x.get("type") == "reasoning"]
+                    if saved and not present:
+                        restored[segment_start:segment_start] = saved; count += len(saved)
+                    elif saved and len(saved) == len(present) == 1 and not _reasoning_content(present[0][1]):
+                        j, existing = present[0]
+                        # Exact output anchor can repair a stub with a stripped
+                        # reasoning ID, but never a different explicit ID.
+                        if not existing.get("id") or existing.get("id") == saved[0].get("id"):
+                            restored[segment_start+j] = dict(existing, content=saved[0]["content"])
+                            count += 1
+                restored.append(item)
+                if isinstance(item, dict) and (item.get("type") in ("function_call_output", "custom_tool_call_output", "compaction")
+                        or item.get("role") in ("user", "developer", "system")):
+                    segment_start = len(restored)
+        return (dict(request, input=restored), count) if count else (request, 0)
+
+
 def _sse_response(payload: dict) -> bytes:
     """Wrap a non-streaming Responses object in the SSE sequence Codex expects.
 
@@ -685,6 +851,28 @@ def _sse_response(payload: dict) -> bytes:
     emit({"type": "response.in_progress", "response": created})
     for index, item in enumerate(response.get("output") or []):
         emit({"type": "response.output_item.added", "output_index": index, "item": item})
+        # Clients may build reasoning history from content events rather than
+        # copying the full item. Preserve text exactly; never invent summaries
+        # or substitute an empty string for missing upstream reasoning.
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            for field, prefix, part_type in (
+                ("content", "response.reasoning", "reasoning_text"),
+                ("summary", "response.reasoning_summary", "summary_text"),
+            ):
+                for part_index, part in enumerate(item.get(field) or []):
+                    if not isinstance(part, dict) or part.get("type") != part_type:
+                        continue
+                    text = part.get("text")
+                    if not isinstance(text, str):
+                        continue
+                    coords = {"item_id": item.get("id"), "output_index": index,
+                              "summary_index" if field == "summary" else "content_index": part_index}
+                    part_event = "response.content_part" if field == "content" else "response.reasoning_summary_part"
+                    emit({"type": part_event + ".added", **coords,
+                          "part": dict(part, text="")})
+                    emit({"type": prefix + "_text.delta", **coords, "delta": text})
+                    emit({"type": prefix + "_text.done", **coords, "text": text})
+                    emit({"type": part_event + ".done", **coords, "part": part})
         emit({"type": "response.output_item.done", "output_index": index, "item": item})
     status = response.get("status", "completed")
     terminal = status if status in ("failed", "incomplete") else "completed"
@@ -702,6 +890,72 @@ def _sse_event_names(raw: bytes) -> List[str]:
         if line.startswith("event: "):
             names.append(line[7:].strip())
     return names
+
+
+def _declaration_metadata(payload):
+    """Walk declaration containers only; never inspect history or schema text."""
+    import hashlib
+    result = []
+    unknown = 0
+
+    def walk(node, namespace=None, depth=0):
+        nonlocal unknown
+        if depth > 32:
+            unknown += 1
+        elif isinstance(node, list):
+            for child in node:
+                walk(child, namespace, depth + 1)
+        elif isinstance(node, dict) and node.get("type") == "namespace":
+            name = node.get("name")
+            if not isinstance(name, str):
+                unknown += 1
+                return
+            walk(node.get("tools"), (namespace + "." + name) if namespace else name, depth + 1)
+        elif isinstance(node, dict) and node.get("type") in ("custom", "function"):
+            result.append({"name": node.get("name"), "type": node["type"], "namespace": namespace,
+                           "schema_sha256": hashlib.sha256(json.dumps(node, sort_keys=True, ensure_ascii=False).encode()).hexdigest()})
+        elif node is not None:
+            unknown += 1
+
+    if "tools" in payload:
+        walk(payload["tools"])
+    if isinstance(payload.get("input"), list):
+        for item in payload["input"]:
+            if isinstance(item, dict) and item.get("type") == "additional_tools":
+                walk(item.get("tools"))
+    return {"items": result, "count": len(result), "unknown_count": unknown}
+
+
+def _observed_calls(raw, content_type, truncated):
+    if truncated:
+        return [], "truncated"
+    if not raw:
+        return [], "not_recorded"
+    try:
+        if "text/event-stream" not in content_type.lower():
+            return call_metadata(json.loads(raw)), "json"
+        found = {}
+        malformed = False
+        for frame in raw.decode("utf-8").replace("\r\n", "\n").split("\n\n"):
+            data = "\n".join(line[5:].lstrip() for line in frame.splitlines() if line.startswith("data:"))
+            if not data or data == "[DONE]":
+                continue
+            try:
+                value = json.loads(data)
+            except ValueError:
+                malformed = True
+                continue
+            if not isinstance(value, dict):
+                malformed = True
+                continue
+            items = [value["item"]] if isinstance(value.get("item"), dict) else []
+            if isinstance(value.get("response"), dict):
+                items += value["response"].get("output") or []
+            for call in call_metadata({"output": items}):
+                found[(call.get("call_ref"), call.get("type"), call.get("name"))] = call
+        return list(found.values()), "partial_sse" if malformed else "sse"
+    except (ValueError, UnicodeError, TypeError):
+        return [], "unparsed"
 
 
 @dataclass
@@ -732,6 +986,12 @@ class BridgeServer:
     #: is relayed byte-for-byte in both directions.  An empty set is rejected: it
     #: would make the bridge a no-op that still adds a hop.
     scoped_models: Optional[FrozenSet[str]] = None
+    protocol_translation: bool = True
+    context_recovery: bool = False
+    #: Optional local file {"mode": off|protocol|context|both}, read once/request.
+    #: Changing it affects the next request; it never replays an in-flight call.
+    experiment_mode_file: Optional[str] = None
+    instance_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         ensure_loopback(self.host)
@@ -747,10 +1007,16 @@ class BridgeServer:
                 "scoped_models 不能为空集：那会让桥成为只增加一跳的空壳。"
                 "要么不给（翻译全部），要么给出确切模型名。"
             )
+        if (self.context_recovery or self.experiment_mode_file) and self.scoped_models is None:
+            raise ValueError("上下文纠偏或四组试验须用 --only-model 指定确切模型")
+        policy(self.experiment_mode_file, self.protocol_translation, self.context_recovery)
         self.registry = ToolRegistry()
+        self.reasoning_history = ReasoningHistory()
         self._server: Optional[ThreadingHTTPServer] = None
         self._ready = threading.Event()
         self._capture_index = 0
+        self._active_requests = 0
+        self._activity_lock = threading.Lock()
 
     def translates(self, model: object) -> bool:
         """Whether traffic for ``model`` goes through protocol translation.
@@ -836,9 +1102,14 @@ class BridgeServer:
                 return
 
             def do_GET(self) -> None:  # noqa: N802
-                if self.path.rstrip("/") in ("", "/health"):
+                if self.path.rstrip("/") in ("", "/health", "/healthz"):
+                    mode, _, _ = policy(bridge.experiment_mode_file, bridge.protocol_translation, bridge.context_recovery)
                     body = json.dumps({"ok": True, "bridge": "codex-responses",
+                                       "identity": "codex-local-workarounds-v1", "instance": bridge.instance_id,
+                                       "compaction_passthrough": True, "bridge_version": BRIDGE_VERSION,
+                                       "active_requests": bridge._active_requests,
                                        "upstream": bridge.upstream_url,
+                                       "experiment_mode": mode,
                                        "models": sorted(bridge.scoped_models) if bridge.scoped_models else None}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -920,9 +1191,17 @@ class BridgeServer:
                 finished = threading.Event()
                 threading.Thread(target=self._watch_disconnect, args=(connection, finished), daemon=True).start()
                 caught = None
+                status = None
+                evidence = bytearray()
+                truncated = False
+                content_type = ""
                 try:
+                    self._experiment_meta["upstream_request_bytes"] = len(raw_body)
                     connection.request("POST", path, raw_body, self._headers())
                     response = connection.getresponse()
+                    status = response.status
+                    if not 200 <= status < 300:
+                        self._experiment_meta["error_origin"] = "upstream_http"
                     content_type = response.getheader("Content-Type", "application/json")
                     if bool(incoming.get("stream")):
                         self._start_stream(response.status, content_type, response.headers)
@@ -930,12 +1209,22 @@ class BridgeServer:
                             chunk = response.read1(65536)
                             if not chunk:
                                 break
+                            if bridge.record_path and self._experiment_meta.get("in_scope"):
+                                if len(evidence) + len(chunk) <= 2 * 1024 * 1024:
+                                    evidence.extend(chunk)
+                                else:
+                                    truncated = True
                             self.wfile.write(chunk)
                             self.wfile.flush()
                     else:
                         # Keep non-stream passthrough a normal, length-delimited
                         # response; only SSE requests use connection-close framing.
-                        self._send_bytes(response.status, response.read(), content_type, response.headers)
+                        data = response.read()
+                        if bridge.record_path and self._experiment_meta.get("in_scope"):
+                            truncated = len(data) > 2 * 1024 * 1024
+                            if not truncated:
+                                evidence.extend(data)
+                        self._send_bytes(response.status, data, content_type, response.headers)
                 except (OSError, http.client.HTTPException) as exc:
                     caught = type(exc).__name__
                     if not self._stream_started and not self._disconnected.is_set():
@@ -943,8 +1232,12 @@ class BridgeServer:
                 finally:
                     finished.set()
                     connection.close()
-                    bridge.record({"route": urlsplit(self.path).path, "model": incoming.get("model"),
+                    calls, parse = _observed_calls(bytes(evidence), content_type, truncated)
+                    bridge.record({**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                   "route": urlsplit(self.path).path, "model": incoming.get("model"),
                                    "mode": "passthrough", "client_stream": bool(incoming.get("stream")),
+                                   "upstream_status": status, "returned_calls": calls, "call_parse": parse,
+                                   "client_disconnected": self._disconnected.is_set(),
                                    "error": caught})
 
             def _translated(self, incoming):
@@ -957,13 +1250,17 @@ class BridgeServer:
                 outgoing, declarations = translate_request(incoming, bridge.registry.get(key))
                 bridge.registry.put(key, declarations)
                 outgoing["stream"] = False
+                encoded_body = json.dumps(outgoing, ensure_ascii=False).encode()
+                self._experiment_meta["upstream_request_bytes"] = len(encoded_body)
                 connection, path = self._connection()
                 finished = threading.Event()
                 result = queue.Queue(maxsize=1)
+                recorded = False
+                upstream_status = None
 
                 def fetch():
                     try:
-                        connection.request("POST", path, json.dumps(outgoing, ensure_ascii=False).encode(), self._headers())
+                        connection.request("POST", path, encoded_body, self._headers())
                         response = connection.getresponse()
                         result.put((response.status, response.headers, response.read()))
                     except (OSError, http.client.HTTPException) as exc:
@@ -991,8 +1288,12 @@ class BridgeServer:
                     if isinstance(response_result, Exception):
                         raise ValueError("Upstream connection failed") from response_result
                     status, headers, raw = response_result
+                    upstream_status = status
+                    if not 200 <= status < 300:
+                        self._experiment_meta["error_origin"] = "upstream_http"
                     # Never follow redirects (especially with Authorization).
                     if not 200 <= status < 300:
+                        self._experiment_meta["reasoning_required_error"] = (b"reasoning_text" in raw and b"passed back" in raw)
                         if not self._stream_started:
                             self._send_bytes(status, raw, headers.get("Content-Type", "application/json"), headers)
                         else:
@@ -1004,11 +1305,15 @@ class BridgeServer:
                     response_id = body.get("id")
                     if isinstance(response_id, str) and response_id:
                         bridge.registry.put(owner + ":" + response_key(response_id), declarations)
+                    if incoming.get("model") == "deepseek-v4.1-flash":
+                        body, normalized = normalize_deepseek_reasoning(body)
+                        self._experiment_meta["reasoning_output_normalized"] = normalized
+                        bridge.reasoning_history.remember(owner, body)
                     upstream_calls = call_metadata(body)
                     diagnostics = []
                     body = translate_response(body, declarations, diagnostics)
                     raw_out = _sse_response(body) if incoming.get("stream") else json.dumps(body, ensure_ascii=False).encode()
-                    meta = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+                    meta = {**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
                             "route": urlsplit(self.path).path, "model": incoming.get("model"),
                             "mode": "translate", "client_stream": bool(incoming.get("stream")),
                             "declared": declarations.describe(),
@@ -1019,6 +1324,7 @@ class BridgeServer:
                             "client_events": _sse_event_names(raw_out) if incoming.get("stream") else [],
                             "diagnostics": diagnostics, "upstream_status": status}
                     bridge.record(meta)
+                    recorded = True
                     bridge.capture(raw.decode("utf-8", "replace"), raw_out.decode("utf-8", "replace"), meta)
                     if self._stream_started:
                         self.wfile.write(raw_out)
@@ -1027,6 +1333,10 @@ class BridgeServer:
                         self._send_bytes(status, raw_out, "text/event-stream" if incoming.get("stream") else "application/json")
                 finally:
                     finished.set()
+                    if not recorded:
+                        bridge.record({**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                       "model": incoming.get("model"), "mode": "translate", "upstream_status": upstream_status,
+                                       "client_disconnected": self._disconnected.is_set(), "error": "translation_not_completed"})
                     # shutdown interrupts a fetch still waiting after cancellation.
                     if self._disconnected.is_set() and connection.sock:
                         try:
@@ -1046,18 +1356,25 @@ class BridgeServer:
             def do_POST(self):  # noqa: N802
                 self._stream_started = False
                 self._disconnected = threading.Event()
+                self._experiment_meta = {"request_ref": uuid.uuid4().hex[:12], "bridge_version": BRIDGE_VERSION}
+                with bridge._activity_lock:
+                    bridge._active_requests += 1
                 try:
                     if self.headers.get("Upgrade"):
                         self._send_bytes(501, b'{"error":"WebSocket is not supported"}')
                         return
-                    if urlsplit(self.path).path not in ("/responses", "/v1/responses"):
+                    route = urlsplit(self.path).path
+                    if route not in ("/responses", "/v1/responses",
+                                     "/responses/compact", "/v1/responses/compact"):
                         self._send_bytes(404, b'{"error":"Unsupported route"}')
                         return
                     if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Encoding", "identity") != "identity":
                         self._send_bytes(415, b'{"error":"Unsupported request encoding"}')
                         return
                     length = int(self.headers.get("Content-Length", "0"))
+                    self._experiment_meta["request_bytes"] = length
                     if not 0 < length <= 32 * 1024 * 1024:
+                        bridge.record({**self._experiment_meta, "error_origin": "local_request_limit", "http_status": 413})
                         self._send_bytes(413, b'{"error":"Invalid or oversized request"}')
                         return
                     self.connection.settimeout(bridge.timeout)
@@ -1065,7 +1382,39 @@ class BridgeServer:
                     incoming = json.loads(raw_body)
                     if not isinstance(incoming, dict):
                         raise ValueError("Request must be an object")
-                    if bridge.translates(incoming.get("model")):
+                    selected = bridge.translates(incoming.get("model"))
+                    mode, protocol, context = policy(bridge.experiment_mode_file, bridge.protocol_translation, bridge.context_recovery)
+                    self._experiment_meta.update(experiment_mode=mode if selected else "out_of_scope", in_scope=selected,
+                                                 context_recovery={"enabled": False}, route=route)
+                    if selected:
+                        self._experiment_meta["request_tools"] = _declaration_metadata(incoming)
+                    if selected and protocol and incoming.get("model") == "deepseek-v4.1-flash":
+                        import hashlib
+                        owner = hashlib.sha256((self.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()).hexdigest()
+                        incoming, normalized = normalize_deepseek_reasoning(incoming)
+                        self._experiment_meta["reasoning_input_normalized"] = normalized
+                        incoming, restored = bridge.reasoning_history.restore(owner, incoming)
+                        self._experiment_meta["reasoning_items_restored"] = restored
+                        self._experiment_meta["reasoning_inventory"] = reasoning_inventory(incoming)
+                        if restored or normalized:
+                            raw_body = json.dumps(incoming, ensure_ascii=False).encode()
+                    compact = compaction_reason(incoming, route)
+                    self._experiment_meta["request_kind"] = "compaction" if compact else "response"
+                    if compact:
+                        # A transforms tools/history and forces stream=False; B
+                        # changes messages. Neither is valid for opaque compact
+                        # operations. Preserve the original body and response,
+                        # including stream framing, in every mode/model scope.
+                        self._experiment_meta["bypass_reason"] = compact
+                        self._relay_verbatim(raw_body, incoming)
+                        return
+                    if selected and context:
+                        _, declared = translate_request(incoming)
+                        incoming, recovery = recover_context(incoming, declared)
+                        self._experiment_meta["context_recovery"] = recovery
+                        if recovery["hint_added"] or recovery["removed_messages"]:
+                            raw_body = json.dumps(incoming, ensure_ascii=False).encode()
+                    if selected and protocol:
                         self._translated(incoming)
                     else:
                         self._relay_verbatim(raw_body, incoming)
@@ -1081,6 +1430,9 @@ class BridgeServer:
                             self._send_bytes(502, b'{"error":{"type":"bridge_error","message":"Invalid request or upstream failure"}}')
                     except OSError:
                         pass
+                finally:
+                    with bridge._activity_lock:
+                        bridge._active_requests -= 1
 
 
         class Server(ThreadingHTTPServer):
@@ -1107,10 +1459,16 @@ def run_bridge(
     host: str = "127.0.0.1",
     port: int = 8787,
     scoped_models: Optional[FrozenSet[str]] = None,
+    protocol_translation: bool = True,
+    context_recovery: bool = False,
+    experiment_mode_file: Optional[str] = None,
+    record_path: Optional[str] = None,
 ) -> None:
     if not upstream_url or not upstream_url.startswith(("http://", "https://")):
         raise ValueError("bridge upstream_url 必须是 http:// 或 https:// 地址")
     ensure_loopback(host)
     BridgeServer(
-        upstream_url=upstream_url, host=host, port=port, scoped_models=scoped_models
+        upstream_url=upstream_url, host=host, port=port, scoped_models=scoped_models,
+        protocol_translation=protocol_translation, context_recovery=context_recovery,
+        experiment_mode_file=experiment_mode_file, record_path=record_path,
     ).serve_forever()

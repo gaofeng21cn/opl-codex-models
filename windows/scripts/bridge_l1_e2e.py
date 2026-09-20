@@ -290,21 +290,35 @@ def run(args) -> int:
         if relay is not None:
             sent2 = relay.requests[1]
             types2 = [item.get("type") for item in sent2["input"]]
+            history_types = [
+                item_type for item_type in types2
+                if item_type in ("function_call", "function_call_output")
+            ]
             report.check(
-                types2[:3] == ["message", "function_call", "function_call_output"],
+                history_types == ["function_call", "function_call_output"],
                 "历史被降级为 function_call / function_call_output",
                 "input=%s" % types2,
             )
-            call_args = sent2["input"][1].get("arguments") if len(sent2["input"]) > 1 else None
+            reasoning_items = [item for item in sent2["input"] if item.get("type") == "reasoning"]
+            report.check(
+                bool(reasoning_items),
+                "推理历史与工具历史同时保留",
+                "input=%s" % types2,
+            )
+            call_item = next(
+                (item for item in sent2["input"] if item.get("type") == "function_call"), {})
+            output_item = next(
+                (item for item in sent2["input"] if item.get("type") == "function_call_output"), {})
+            call_args = call_item.get("arguments")
             report.check(
                 isinstance(call_args, str) and json.loads(call_args).get("input") == "ls -la",
                 "历史 custom input 还原进 arguments",
                 repr(call_args)[:70],
             )
             report.check(
-                sent2["input"][2].get("call_id") == turn1_call_id,
+                output_item.get("call_id") == turn1_call_id,
                 "call_id 字节级配对",
-                str(sent2["input"][2].get("call_id")),
+                str(output_item.get("call_id")),
             )
             report.check(
                 isinstance(sent2.get("tools"), list)

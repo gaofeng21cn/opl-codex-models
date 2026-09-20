@@ -12,8 +12,8 @@ All writes go to an isolated temp CODEX_HOME. No user real config is touched.
 No credentials are read or emitted.
 
 Usage (from the project root):
-  set PYTHONPATH=outputs\opl-codex-models-windows\src
-  py outputs\opl-codex-models-windows\integration-evidence\integration_flow.py
+  set PYTHONPATH=src
+  py integration-evidence\integration_flow.py --runtime C:\path\to\codex
   py ...\integration_flow.py --runtime C:\path\to\codex --distro Ubuntu
 
 Exit code 0 = all steps passed; non-zero = a step failed (see stderr).
@@ -41,7 +41,7 @@ from codex_model_manager.core.compat_probe import (
 )
 from codex_model_manager.core.config_editor import set_model_catalog, undo_model_catalog
 
-DEFAULT_RUNTIME = r"C:\Users\MECHREVO\.codex\bin\wsl\385b74eb4db8c237\codex"
+DEFAULT_RUNTIME = os.environ.get("CODEX_RUNTIME_PATH", "")
 DEFAULT_DISTRO = "Ubuntu"
 
 
@@ -59,11 +59,19 @@ def _fail(msg: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--runtime", default=DEFAULT_RUNTIME)
+    parser.add_argument(
+        "--runtime",
+        default=DEFAULT_RUNTIME,
+        help="Windows-visible path to the WSL codex executable "
+             "(or set CODEX_RUNTIME_PATH)",
+    )
     parser.add_argument("--distro", default=DEFAULT_DISTRO)
     parser.add_argument("--timeout", type=float, default=60.0)
     args = parser.parse_args()
 
+    if not args.runtime:
+        _fail("请用 --runtime 指定 WSL codex 文件，或设置 CODEX_RUNTIME_PATH。")
+        return 2
     if not os.path.isfile(args.runtime):
         _fail(f"运行时文件不存在：{args.runtime}")
         return 2

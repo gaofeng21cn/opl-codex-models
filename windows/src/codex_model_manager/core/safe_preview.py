@@ -404,3 +404,52 @@ def os_path_sep() -> str:
     import os
 
     return os.sep
+
+
+def catalog_write_gate(config, sandbox_source: str, target: str) -> ApplyGate:
+    """Decide whether a write to a model *catalog file* is allowed.
+
+    A second writer next to :func:`apply_gate` must not become a second door into
+    a real ``config.toml``/catalog, so this reuses exactly the same confinement
+    rules rather than re-deriving them:
+
+      - a directory target is refused;
+      - demo mode: the canonical target must be inside the app sandbox (the
+        directory holding ``sandbox_source``), so ``..``/symlinks/junctions cannot
+        escape;
+      - real mode: a compatibility evidence snapshot that still binds to the
+        current runtime is required, exactly as ``apply_gate`` requires it. Without
+        it the caller stays read-only.
+
+    Callers pass ``sandbox_source=config.merged_catalog_path`` to match the sandbox
+    :func:`apply_gate` uses. Reading is never gated here: preview callers simply do
+    not write.
+    """
+    import os
+
+    resolved = _canonical(target)
+    if os.path.isdir(resolved):
+        return ApplyGate(target=resolved, writable=False,
+                         reason=f"目标是目录，拒绝写入：{resolved}")
+
+    if getattr(config, "is_demo", False):
+        reason = demo_write_block_reason(config, sandbox_source, target)
+        if reason:
+            return ApplyGate(target=resolved, writable=False, reason=reason)
+        return ApplyGate(target=resolved, writable=True)
+
+    from .compat_probe import evidence_from_dict, evidence_valid
+    from .errors import CodexModelError
+
+    evidence = evidence_from_dict(config.compat_evidence)
+    try:
+        current_target = config.runtime_target()
+    except CodexModelError:
+        current_target = None
+    if current_target is not None and evidence_valid(evidence, current_target):
+        return ApplyGate(target=resolved, writable=True)
+    return ApplyGate(
+        target=resolved, writable=False,
+        reason="未验证 Codex 兼容性：缺少绑定到当前运行时的有效证据，不能写回模型目录。"
+        "请先运行 `probe --verify`（验证兼容性）成功后再写入。已保持只读预览，未写入。",
+    )

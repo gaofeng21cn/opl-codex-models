@@ -1339,3 +1339,22 @@ DeepSeek V4.1 Flash 的目录档位现在为 `low`、`high`、`max`，默认 `hi
   `scripts/` 和 `integration-evidence/` 中实际交付的脚本与脱敏结果。
 - 仍需发布者在目标 Git 仓库中完成一次 Windows 全套测试复跑，并检查待提交文件列表；桥默认关闭，
   不会因为安装或导入本项目而修改 Codex provider 配置。
+
+
+## Windows 图形连接管理（2026-09-20）
+
+新增 bridge_panel、BridgeClient 与 managed_bridge；支持 Windows/WSL 后台服务、原脚本事务接管、模式切换、两模型作用范围、进程身份校验、配置冲突检测及恢复。凭据由 Codex 注入，不读取 keyring。
+
+184 passed, 1 skipped。gui_connection_smoke.py 在真实 tkinter 窗口驱动按钮，临时配置全流程通过。便携 EXE native worker 与打包 WSL worker 只读查询通过。当前真实桥仍只针对 GPT；用户退出 Codex 后选“两者”并重启桥启用 DeepSeek。
+
+入口 scripts/desktop_entry.py；构建 scripts/build_windows.py；源码双击 Start.cmd；说明 QUICKSTART.md。Computer Use 节点仍有 sandboxCwd URI 初始化错误；本轮以应用自身 Tk 按钮测试和截图验收，未宣称 Computer Use 成功。未推送或发布新版本。
+
+## 第 22 节：接管功能收口与委派层退役（2026-09-20）
+
+- 修复 `takeover-apply --active A` 预览 A 却写配置引用 B 的目标错位；导入、预览和实际写回现在绑定同一个目标，换目标必须重新导入。
+- `edit-model --catalog` 只允许配置中明确登记的 `takeoverCatalogPath`，演示配置的待应用目录继续受沙箱约束，不能借该参数写任意 JSON。
+- 旧版应用配置缺少 `takeoverCatalogPath` 时，在内存中自动派生为管理器合并目录旁的 `pending-models.json`；便携配置也使用自身 `user-data` 目录，不因打开界面改写旧配置。
+- 写回活跃目录前先持久化完整撤销记录；若应用配置保存失败，活跃目录字节保持不变。备份、原子替换、外部修改冲突与删除确认语义保留。
+- Windows TOML 回归使用 POSIX 形式路径，避免反斜杠被 TOML 当作非法转义。
+- 与外部 `dsh` 直接委派重复的 `deepseek-delegation` MCP 已从发布源码、测试和文档移除；全局 MCP 注册通过 Codex CLI 正常删除。退役源码归档在项目外层 `work/archive/deepseek-mcp-retired-20260920.tar.gz`，不进入发布包。
+- Windows `.venv` 定向测试：`tests/test_takeover.py` **32 passed**。移除 MCP 前全套为 **236 passed, 1 skipped**；发布范围移除其 6 项测试后，最终门槛为 **230 passed, 1 skipped**（唯一跳过仍为本机无符号链接权限）。

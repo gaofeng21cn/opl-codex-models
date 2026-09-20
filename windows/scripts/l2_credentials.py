@@ -59,8 +59,9 @@ import subprocess
 import sys
 from typing import Callable, Optional
 
-#: Codex's default CODEX_HOME on this machine (WSL path space).
-DEFAULT_CODEX_HOME = "/mnt/c/Users/MECHREVO/.codex"
+#: Codex's normal CODEX_HOME in the current environment.  Callers may still
+#: override it explicitly when probing another installation.
+DEFAULT_CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
 
 #: The JSON key Codex stores the OpenAI credential under.
 DEFAULT_SECRET_KEY = "OPENAI_API_KEY"

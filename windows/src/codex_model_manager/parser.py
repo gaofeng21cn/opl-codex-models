@@ -54,30 +54,51 @@ def parse_models(custom_data: bytes, catalog_data: bytes) -> List[CatalogModel]:
     catalog_objects = catalog_root.get("models") or []
     custom_slugs = {m.get("slug") for m in custom_objects if isinstance(m, dict)}
 
-    models: List[CatalogModel] = []
-    for raw in catalog_objects:
-        if not isinstance(raw, dict):
-            continue
-        slug = raw.get("slug")
-        if not slug:
-            continue
-        models.append(
-            CatalogModel(
-                slug=str(slug),
-                display_name=str(raw.get("display_name") or slug),
-                description=str(raw.get("description") or ""),
-                input_modalities=raw.get("input_modalities") if isinstance(raw.get("input_modalities"), list) else ["text"],
-                supports_original_image_detail=bool(raw.get("supports_image_detail_original") or False),
-                context_window=_as_int(raw.get("context_window")),
-                max_context_window=_as_int(raw.get("max_context_window")),
-                priority=_as_int(raw.get("priority")),
-                visibility=raw.get("visibility"),
-                supported_in_api=bool(raw.get("supported_in_api") or False),
-                reasoning=ReasoningSettings.from_model(raw),
-                source="custom" if slug in custom_slugs else "official",
-            )
-        )
-    return models
+    return [
+        model_from_raw(raw, "custom" if raw.get("slug") in custom_slugs else "official")
+        for raw in catalog_objects
+        if isinstance(raw, dict) and raw.get("slug")
+    ]
+
+
+def model_from_raw(raw: dict, source: str) -> CatalogModel:
+    """Build one CatalogModel from a raw catalog object, tagging its `source`.
+
+    The mapping is shared by every reader so the GUI, the CLI and the takeover
+    view can never disagree about what a catalog entry means.
+    """
+    slug = raw.get("slug")
+    return CatalogModel(
+        slug=str(slug),
+        display_name=str(raw.get("display_name") or slug),
+        description=str(raw.get("description") or ""),
+        input_modalities=raw.get("input_modalities") if isinstance(raw.get("input_modalities"), list) else ["text"],
+        supports_original_image_detail=bool(raw.get("supports_image_detail_original") or False),
+        context_window=_as_int(raw.get("context_window")),
+        max_context_window=_as_int(raw.get("max_context_window")),
+        priority=_as_int(raw.get("priority")),
+        visibility=raw.get("visibility"),
+        supported_in_api=bool(raw.get("supported_in_api") or False),
+        reasoning=ReasoningSettings.from_model(raw),
+        source=source,
+    )
+
+
+def parse_catalog_models(data: bytes, source: str = "pending") -> List[CatalogModel]:
+    """Parse a single catalog document, tagging every model with `source`.
+
+    Used by the takeover view: the pending catalog's entries are all editable
+    there, whether a given entry started life as an official or a custom model.
+    """
+    import json
+
+    root = json.loads(data.decode("utf-8"))
+    objects = root.get("models") or []
+    return [
+        model_from_raw(raw, source)
+        for raw in objects
+        if isinstance(raw, dict) and raw.get("slug")
+    ]
 
 
 def parse_records(text: str, start: int = 0) -> List[dict]:

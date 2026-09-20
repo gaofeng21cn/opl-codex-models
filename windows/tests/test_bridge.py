@@ -1144,6 +1144,43 @@ def _post_exact(url: str, raw: bytes, content_type: str = "application/json"):
         return exc.code, exc.headers.get("Content-Type", ""), exc.read()
 
 
+@pytest.mark.parametrize("compacting", [False, True])
+@pytest.mark.parametrize("model", ["deepseek-v4.1-flash", "gpt-6-astra"])
+def test_history_item_ids_are_type_local_and_call_ids_survive(tmp_path, compacting, model):
+    payload = _request()
+    payload["model"] = model
+    payload["stream"] = False
+    history = [
+        {"type": "custom_tool_call", "id": "ctc_probe", "name": "exec",
+         "call_id": "call_probe", "input": "return 1"},
+        {"type": "custom_tool_call_output", "id": "ctco_probe",
+         "call_id": "call_probe", "output": [{"type": "input_text", "text": "1"}]},
+        {"type": "function_call_output", "id": "fco_keep",
+         "call_id": "call_other", "output": "unchanged"},
+    ]
+    payload["input"].extend(history)
+    if compacting:
+        payload["input"].append({"type": "compaction_trigger"})
+    before = json.dumps(payload)
+    relay, result, _, _ = _run_scope_case(
+        tmp_path, scoped=frozenset({"deepseek-v4.1-flash"}), payload=payload,
+        reply=b'{"id":"resp_probe","output":[],"status":"completed"}',
+    )
+    assert result[0] == 200
+    sent = json.loads(relay.bodies[0])
+    assert json.dumps(payload) == before
+    if model == "gpt-6-astra" or compacting:
+        assert relay.bodies[0] == before.encode("utf-8")
+        return
+    call, output, ordinary = sent["input"][1:4]
+    assert call["type"] == "function_call" and "id" not in call
+    assert output["type"] == "function_call_output" and "id" not in output
+    assert call["call_id"] == output["call_id"] == "call_probe"
+    assert json.loads(call["arguments"]) == {"input": "return 1"}
+    assert output["output"] == history[1]["output"]
+    assert ordinary == history[2]
+
+
 def _gpt_payload() -> dict:
     """A non-DeepSeek request carrying custom tools — the shape GPT customers send."""
     return {

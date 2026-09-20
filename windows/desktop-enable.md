@@ -129,7 +129,7 @@ env_key = "DEEPSEEK_RELAY_KEY"        # ← 本探针验证的就是 env_key 这
 
 ```powershell
 # 0) 应用配置尚未创建时先建一份；--codex-config 必须显式给出真实 config.toml
-$py  = ".\outputs\opl-codex-models-windows\.venv\Scripts\python.exe"
+$py  = ".\.venv\Scripts\python.exe"
 $cfg = "$env:LOCALAPPDATA\CodexModelManager\config.json"
 $real = "$env:USERPROFILE\.codex\config.toml"
 
@@ -146,8 +146,11 @@ $real = "$env:USERPROFILE\.codex\config.toml"
 在 Codex 所在的 WSL 发行版终端运行（Ctrl+C 停止）：
 
 ```bash
-PYTHONPATH=/mnt/c/Users/MECHREVO/Documents/Codex/2026-09-18/https-github-com-gaofeng21cn-opl-codex-3/outputs/opl-codex-models-windows/src \
-python3 -m codex_model_manager --config /mnt/c/Users/MECHREVO/AppData/Local/CodexModelManager/config.json \
+# 先 cd 到仓库的 windows 目录。
+PROJECT_DIR="$PWD"
+CONFIG_PATH="/mnt/c/Users/<你的 Windows 用户名>/AppData/Local/CodexModelManager/config.json"
+PYTHONPATH="$PROJECT_DIR/src" \
+python3 -m codex_model_manager --config "$CONFIG_PATH" \
   bridge start --host 127.0.0.1 --port 8787 --only-model deepseek-v4.1-flash
 ```
 
@@ -178,13 +181,13 @@ python3 -m codex_model_manager --config /mnt/c/Users/MECHREVO/AppData/Local/Code
 
 ```powershell
 # 桥自身：内置假中转，零外部依赖
-& $py outputs\opl-codex-models-windows\scripts\bridge_l1_e2e.py
+& $py .\scripts\bridge_l1_e2e.py
 
 # 协议闭环：合成白名单工具 probe_echo（--fake 为离线自检）
-& $py outputs\opl-codex-models-windows\scripts\bridge_l2_probe.py --fake --path both
+& $py .\scripts\bridge_l2_probe.py --fake --path both
 
 # SSE 帧格式：用真实客户端 + 零模型调用回放
-& $py outputs\opl-codex-models-windows\scripts\bridge_replay.py --capture <capture_dir> --port 8798
+& $py .\scripts\bridge_replay.py --capture <capture_dir> --port 8798
 ```
 
 换中转或换 Codex 版本后**应重跑**：尤其 `bridge_replay.py`，它能零成本验证帧格式是否仍被客户端接受。

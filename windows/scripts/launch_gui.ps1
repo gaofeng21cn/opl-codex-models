@@ -1,14 +1,12 @@
-# Launch the tkinter GUI against the persistent mock demo environment.
-# No real Codex required; everything is simulated.
-#
-#   .\scripts\launch_gui.ps1
-
-$ErrorActionPreference = "Stop"
+param([switch]$Demo, [string]$Config)
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$config = powershell -ExecutionPolicy Bypass -File (Join-Path $root "scripts\setup_demo.ps1") | Select-Object -Last 1
-$config = $config.Trim()
-$venvPython = Join-Path $root ".venv\Scripts\python.exe"
-$env:PYTHONPATH = Join-Path $root "src"
-$env:PYTHONDONTWRITEBYTECODE = "1"
-Write-Host "Launching GUI with demo config: $config"
-& $venvPython -m codex_model_manager.gui.app --config $config
+$python = Join-Path $root '.venv\Scripts\pythonw.exe'
+if (-not (Test-Path $python)) { throw 'Use the portable EXE, or install requirements.txt in .venv first.' }
+if ($Demo) {
+    $Config = powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'setup_demo.ps1') | Select-Object -Last 1
+    $Config = $Config.Trim()
+}
+if (-not $Config) { $Config = Join-Path $root 'user-data\config.json' }
+$entry = Join-Path $PSScriptRoot 'desktop_entry.py'
+Start-Process -FilePath $python -ArgumentList @('"' + $entry + '"', '--config', '"' + $Config + '"') -WorkingDirectory $root

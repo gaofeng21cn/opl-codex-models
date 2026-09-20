@@ -10,13 +10,13 @@ Prerequisites:
   - Codex runtime at the path below (or pass --runtime / --distro)
 
 Usage (from the project root):
-  py -3.12 -m pip install -r outputs\opl-codex-models-windows\requirements.txt
-  set PYTHONPATH=outputs\opl-codex-models-windows\src
-  py outputs\opl-codex-models-windows\integration-evidence\probe_wsl_compat.py
+  py -3.12 -m pip install -r requirements.txt
+  set PYTHONPATH=src
+  py integration-evidence\probe_wsl_compat.py --runtime C:\path\to\codex
   py ...\probe_wsl_compat.py --runtime C:\path\to\codex --distro Ubuntu
 
 Output: prints desensitised evidence JSON to stdout and writes it to
-  outputs\opl-codex-models-windows\integration-evidence\wsl-chain-evidence.json
+  integration-evidence\wsl-chain-evidence.json
 
 No credentials are read or emitted. All runs use an isolated temp CODEX_HOME.
 """
@@ -38,21 +38,29 @@ from codex_model_manager.core.wsl_adapter import make_wsl_target, resolve_distro
 from codex_model_manager.core.compat_probe import probe_compatibility, evidence_to_dict
 
 
-DEFAULT_RUNTIME = r"C:\Users\MECHREVO\.codex\bin\wsl\385b74eb4db8c237\codex"
+DEFAULT_RUNTIME = os.environ.get("CODEX_RUNTIME_PATH", "")
 DEFAULT_DISTRO = "Ubuntu"
 OUTPUT_FILE = HERE / "wsl-chain-evidence.json"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--runtime", default=DEFAULT_RUNTIME,
-                        help="Windows-visible path to the codex executable")
+    parser.add_argument(
+        "--runtime",
+        default=DEFAULT_RUNTIME,
+        help="Windows-visible path to the WSL codex executable "
+             "(or set CODEX_RUNTIME_PATH)",
+    )
     parser.add_argument("--distro", default=DEFAULT_DISTRO,
                         help="WSL distribution name (default: Ubuntu)")
     parser.add_argument("--timeout", type=float, default=60.0,
                         help="Per-step timeout in seconds")
     args = parser.parse_args()
 
+    if not args.runtime:
+        print("错误：请用 --runtime 指定 WSL codex 文件，或设置 CODEX_RUNTIME_PATH。",
+              file=sys.stderr)
+        return 2
     if not os.path.isfile(args.runtime):
         print(f"错误：运行时文件不存在：{args.runtime}", file=sys.stderr)
         return 2

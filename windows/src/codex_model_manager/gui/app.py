@@ -11,17 +11,32 @@ The module is import-safe without a display so tests can import it.
 from __future__ import annotations
 
 import os
+import copy
+from pathlib import Path
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..core.app_config import AppConfiguration
 from ..core.backup import backup_file, restore_file, classify_backup
-from ..core.custom_models import NewModelDraft
-from ..core.errors import CodexModelError, ConfigurationNotFound, InvalidConfiguration, RuntimeNotFound
+from ..core.custom_models import ModelEdit, NewModelDraft
+from ..core.errors import (
+    CodexModelError,
+    ConfigurationNotFound,
+    ConflictError,
+    InvalidConfiguration,
+    RuntimeNotFound,
+)
 from ..core.reasoning import ReasoningSettings
 from ..core.safe_preview import parse_error_note, preview, render_preview, same_as_current
 from ..services.catalog_data_service import CatalogDataService, CatalogSnapshot
+from .takeover_panel import TakeoverPanel
+
+# The three catalog views of the model page. Only the first is read-only; the other
+# two are editable files the manager owns.
+VIEW_CONFIGURED = "Codex 配置引用（只读）"
+VIEW_MANAGER = "管理器编辑目录"
+VIEW_PENDING = "待应用目录（接管）"
 
 KNOWN_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
@@ -176,6 +191,86 @@ class AddModelDialog(tk.Toplevel):
         return ReasoningSettings(supported_efforts=supported, default_effort=self.vars["reasoning_default"].get())
 
 
+class EditModelDialog(tk.Toplevel):
+    """Edit one existing model: reasoning levels/default, context, name, description.
+
+    Every field is optional and pre-filled from the current model, so saving without
+    changes is a no-op. Fields the user cannot see (unknown provider keys) are left
+    exactly as they are, which is what makes editing a model the user did not author
+    safe.
+    """
+
+    def __init__(self, master, model, on_submit):
+        super().__init__(master)
+        self.title(f"编辑模型 - {model.slug}")
+        self.resizable(False, False)
+        self.grab_set()
+        self.configure(padx=12, pady=12)
+        self.on_submit = on_submit
+        reasoning = model.reasoning
+        self.vars = {
+            "name": tk.StringVar(value=model.display_name or ""),
+            "description": tk.StringVar(value=model.description or ""),
+            "context": tk.StringVar(value="" if model.context_window is None else str(model.context_window)),
+            "max_context": tk.StringVar(value="" if model.max_context_window is None else str(model.max_context_window)),
+            "efforts": tk.StringVar(value=",".join(reasoning.supported_efforts)),
+            "default": tk.StringVar(value=reasoning.default_effort or ""),
+        }
+        rows = [
+            ("名称", ttk.Entry(self, textvariable=self.vars["name"])),
+            ("描述", ttk.Entry(self, textvariable=self.vars["description"])),
+            ("当前上下文", ttk.Entry(self, textvariable=self.vars["context"])),
+            ("最大上下文", ttk.Entry(self, textvariable=self.vars["max_context"])),
+            ("推理档位 (逗号分隔)", ttk.Entry(self, textvariable=self.vars["efforts"])),
+            ("默认档位", ttk.Entry(self, textvariable=self.vars["default"])),
+        ]
+        for r, (label, widget) in enumerate(rows):
+            ttk.Label(self, text=label).grid(row=r, column=0, sticky="w", padx=4, pady=4)
+            widget.grid(row=r, column=1, sticky="we", padx=4, pady=4)
+        ttk.Label(self, text="留空的字段保持不变；未知字段与其他模型不受影响。",
+                  style="Muted.TLabel").grid(row=len(rows), column=0, columnspan=2,
+                                             sticky="w", padx=4, pady=(6, 0))
+        ttk.Button(self, text="保存", command=self._save).grid(
+            row=len(rows) + 1, column=0, columnspan=2, pady=10)
+
+    def _save(self):
+        def int_or_none(key, label):
+            raw = self.vars[key].get().strip()
+            if not raw:
+                return None
+            try:
+                value = int(raw)
+            except ValueError:
+                messagebox.showerror("无效数值", f"{label}必须是正整数。", parent=self)
+                raise ValueError(label) from None
+            if value <= 0:
+                messagebox.showerror("无效数值", f"{label}必须是正整数。", parent=self)
+                raise ValueError(label)
+            return value
+
+        efforts = [e.strip() for e in self.vars["efforts"].get().split(",") if e.strip()]
+        default = self.vars["default"].get().strip()
+        reasoning = None
+        if efforts or default:
+            reasoning = ReasoningSettings(supported_efforts=efforts, default_effort=default)
+            if not reasoning.is_valid:
+                messagebox.showerror("无效配置", "请至少选择一个推理档位，并将默认档位设为其中之一。",
+                                     parent=self)
+                return
+        try:
+            edit = ModelEdit(
+                context_window=int_or_none("context", "当前上下文"),
+                max_context_window=int_or_none("max_context", "最大上下文"),
+                display_name=self.vars["name"].get().strip() or None,
+                description=self.vars["description"].get(),
+                reasoning=reasoning,
+            )
+        except ValueError:
+            return
+        self.on_submit(edit)
+        self.destroy()
+
+
 class SettingsDialog(tk.Toplevel):
     """Settings dialog for backend, distro, runtime path, CODEX_HOME, and target config."""
 
@@ -273,7 +368,7 @@ class SettingsDialog(tk.Toplevel):
 class CodexModelManagerApp:
     def __init__(self, root, config_url: str | None = None):
         self.root = root
-        self.root.title("Codex 模型管理器（Windows）")
+        self.root.title("Codex 模型管理器")
         self.config_url = config_url or AppConfiguration.default_url()
         self._config: AppConfiguration | None = None
         self.data: CatalogDataService | None = None
@@ -282,8 +377,10 @@ class CodexModelManagerApp:
         self._config_error: str = ""
         self._runtime_error: str = ""
         self._syncing = False
+        self._catalog_generation = 0
         self._build()
         self._reload(build=True)
+        self.bridge_panel.bind_configuration()
         # populate the list once a working runtime/config is available
         if self.data is not None:
             self.refresh()
@@ -293,6 +390,15 @@ class CodexModelManagerApp:
             return AppConfiguration.load(self.config_url)
         except ConfigurationNotFound:
             cfg = AppConfiguration.recommended()
+            # Keep portable distributions self-contained; merely opening the GUI
+            # must not create model sources or change a real Codex configuration.
+            home = Path(self.config_url).parent
+            cfg.custom_source_path = str(home / 'custom-models.json')
+            cfg.merged_catalog_path = str(home / 'models.json')
+            cfg.sync_log_path = str(home / 'logs/sync.jsonl')
+            cfg.error_log_path = str(home / 'logs/sync.error.log')
+            cfg.backup_directory_path = str(home / 'backups')
+            cfg.takeover_catalog_path = str(home / 'pending-models.json')
             cfg.save(self.config_url)
             return cfg
 
@@ -312,7 +418,7 @@ class CodexModelManagerApp:
         self._runtime_error = ""
         if self._config is not None:
             try:
-                self.data = CatalogDataService(self._config.resolved())
+                self.data = CatalogDataService(self._config.resolved_paths())
             except RuntimeNotFound as exc:
                 self.data = None
                 self._runtime_error = str(exc)
@@ -357,16 +463,66 @@ class CodexModelManagerApp:
             self.status.set(base)
 
     def _build(self):
+        from .bridge_panel import BridgePanel
+        self.root.geometry('1060x640')
+        self.root.minsize(980, 620)
+        import sv_ttk
+        import tkinter.font as tkfont
+        sv_ttk.set_theme('light')
+        for name in tkfont.names(self.root):
+            # The theme owns separate fonts for entries, buttons and headings.
+            # Configure those too, rather than only ttk's default style.
+            tkfont.nametofont(name).configure(family='Microsoft YaHei UI')
+        for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont', 'TkTooltipFont', 'TkFixedFont'):
+            tkfont.nametofont(name).configure(size=10)
+        icon = Path(__file__).with_name('assets') / 'app.png'
+        if icon.exists():
+            self._app_icon = tk.PhotoImage(file=str(icon))
+            self.root.iconphoto(True, self._app_icon)
+        self.root.option_add('*TCombobox*Listbox.font', ('Microsoft YaHei UI', 11))
+        style = ttk.Style(self.root)
+        style.configure('.', font=('Microsoft YaHei UI', 11))
+        style.configure('Title.TLabel', font=('Microsoft YaHei UI', 22, 'bold'))
+        style.configure('Heading.TLabel', font=('Microsoft YaHei UI', 13, 'bold'))
+        style.configure('Muted.TLabel', foreground='#666666')
+        style.configure('Section.TLabel', font=('Microsoft YaHei UI', 11, 'bold'))
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill='both', expand=True, padx=12, pady=12)
+        self.bridge_panel = BridgePanel(self.notebook, self.config_url, lambda: self._config)
+        self.notebook.add(self.bridge_panel, text='连接与兼容')
+        self.models_page = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.models_page, text='模型管理')
+        self.notebook.bind('<<NotebookTabChanged>>', lambda _: self.refresh() if self.notebook.select() == str(self.models_page) else None)
+        source = ttk.Frame(self.models_page)
+        source.pack(fill='x', padx=8, pady=(0, 10))
+        self.catalog_view = tk.StringVar(value=VIEW_CONFIGURED)
+        picker = ttk.Combobox(source, textvariable=self.catalog_view,
+                             values=[VIEW_CONFIGURED, VIEW_MANAGER, VIEW_PENDING],
+                             state='readonly', width=28)
+        picker.pack(side='left')
+        picker.bind('<<ComboboxSelected>>', lambda _: self.refresh())
+        self.catalog_path = tk.StringVar(value='正在读取目录…')
+        ttk.Label(self.models_page, textvariable=self.catalog_path, wraplength=950, style='Muted.TLabel').pack(fill='x', padx=8, pady=(0, 10))
+
+        # Takeover: the directory Codex reads and the manager's pending copy, shown
+        # side by side so "which file is in effect" is never a guess.
+        self.takeover_panel = TakeoverPanel(
+            self.models_page, self._current_config, self.config_url,
+            on_changed=self._after_takeover_change, set_status=self._set_status,
+            snapshot_provider=self._load_pending_snapshot)
+        self.takeover_panel.pack(fill='x', padx=8, pady=(0, 8))
         pad = {"padx": 8, "pady": 4}
-        top = ttk.Frame(self.root)
+        top = ttk.Frame(self.models_page)
         top.pack(fill="x")
         ttk.Button(top, text="同步（预览，不写 Codex）", command=self.sync).pack(
             side="left", **pad)
         ttk.Button(top, text="新增模型", command=self.add_model).pack(side="left", **pad)
-        ttk.Button(top, text="编辑推理档位", command=self.edit_reasoning).pack(side="left", **pad)
+        ttk.Button(top, text="编辑模型…", command=self.edit_reasoning).pack(side="left", **pad)
         ttk.Button(top, text="刷新", command=self.refresh).pack(side="left", **pad)
         ttk.Button(top, text="备份", command=self.backup).pack(side="left", **pad)
         ttk.Button(top, text="恢复…", command=self.restore).pack(side="left", **pad)
+        top = ttk.Frame(self.models_page)
+        top.pack(fill='x')
         ttk.Button(top, text="设置 Codex 运行时…", command=self.choose_runtime).pack(
             side="left", **pad)
         ttk.Button(top, text="验证兼容性", command=self.verify_compatibility).pack(
@@ -377,19 +533,14 @@ class CodexModelManagerApp:
             side="left", **pad)
         ttk.Button(top, text="撤销 apply", command=self.undo_apply).pack(
             side="left", **pad)
-        ttk.Button(top, text="启用本地桥…", command=self.bridge_enable).pack(
-            side="left", **pad)
-        ttk.Button(top, text="关闭本地桥", command=self.bridge_disable).pack(
-            side="left", **pad)
-
-        mid = ttk.Frame(self.root)
-        mid.pack(fill="both", expand=True)
+        mid = ttk.Frame(self.models_page)
+        mid.pack(fill="x", pady=10)
         self.search_var = tk.StringVar()
         ttk.Label(mid, text="搜索").pack(side="left", padx=8)
         ttk.Entry(mid, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=8)
         self.search_var.trace_add("write", lambda *_: self._render_list())
 
-        body = ttk.Panedwindow(self.root, orient="horizontal")
+        body = ttk.Panedwindow(self.models_page, orient="horizontal")
         body.pack(fill="both", expand=True, padx=8, pady=8)
 
         left = ttk.Frame(body)
@@ -407,20 +558,67 @@ class CodexModelManagerApp:
         self.detail = tk.Text(right, height=20, state="disabled")
         self.detail.pack(fill="both", expand=True)
 
-        bottom = ttk.Frame(self.root)
+        bottom = ttk.Frame(self.models_page)
         bottom.pack(fill="x")
         self.status = tk.StringVar(value="就绪")
-        ttk.Label(self.root, textvariable=self.status, anchor="w").pack(side="bottom", fill="x", padx=8, pady=4)
+        ttk.Label(self.models_page, textvariable=self.status, anchor="w").pack(side="bottom", fill="x", padx=8, pady=4)
         self._models_cache = []
 
     def refresh(self):
+        self._catalog_generation += 1
+        generation = self._catalog_generation
+        # The takeover labels describe which file Codex reads right now versus the
+        # manager's pending copy, so keep them current whichever view is showing.
+        self.takeover_panel.refresh_state()
+        if self.catalog_view.get() == VIEW_PENDING:
+            self._refresh_pending()
+            return
+        if self.catalog_view.get() == VIEW_CONFIGURED:
+            import queue
+            from ..parser import CatalogModel
+            self._snapshot = None
+            self._render_list()
+            self.catalog_path.set('正在读取连接页所选 Codex 配置…')
+            try: settings = self.bridge_panel.settings()
+            except Exception:
+                self.catalog_path.set('请先在连接页选择有效配置。'); return
+            events = queue.Queue()
+            def work():
+                try: events.put((True, self.bridge_panel.client.call('catalog', settings)))
+                except Exception: events.put((False, None))
+            threading.Thread(target=work, daemon=True).start()
+            def poll():
+                if generation != self._catalog_generation: return
+                try: ok, result = events.get_nowait()
+                except queue.Empty:
+                    self.root.after(100, poll); return
+                if not ok:
+                    self.catalog_path.set('无法读取配置引用目录。请核对连接页路径与运行位置。'); return
+                models = []
+                for item in result['models']:
+                    item = dict(item)
+                    item['reasoning'] = ReasoningSettings(**item['reasoning'])
+                    item['source'] = 'configured'
+                    models.append(CatalogModel(**item))
+                self._snapshot = CatalogSnapshot(models, [], '')
+                self.catalog_path.set((result['path'] or '未指定 model_catalog_json') + ' — ' + result['message'])
+                self._render_list()
+            self.root.after(100, poll)
+            return
+        self.catalog_path.set('管理器编辑目录：' + (str(self._config.merged_catalog_path) if self._config else '未配置') + '（未必已应用到 Codex）')
+        self.takeover_panel.refresh_state()
+        if self.data is None:
+            self._snapshot = None
+            self._render_list()
+            return
         try:
             self._snapshot = self.data.load_snapshot()
             self._last_err = ""
         except Exception as exc:  # noqa: BLE001
             self._snapshot = None
             self._last_err = f"{exc}"
-            self.status.set(f"加载失败：{exc}")
+            self.status.set('尚无本地模型目录。点击“同步”读取 Codex 模型，或先在连接页管理兼容桥。'
+                            if isinstance(exc, FileNotFoundError) else f"加载失败：{exc}")
         self._render_list()
 
     def _visible_models(self):
@@ -429,11 +627,46 @@ class CodexModelManagerApp:
         needle = self.search_var.get()
         return [m for m in self._snapshot.models if m.matches(needle)]
 
+    def _refresh_pending(self):
+        """Show the manager's pending (待应用) catalog: every entry is editable there.
+
+        Both directories are named explicitly, because the whole point of the
+        takeover view is that one of them is what Codex reads right now and the
+        other is not.
+        """
+        from ..core import takeover
+
+        self._snapshot = None
+        self._render_list()
+        if self._config is None:
+            self.catalog_path.set('接管不可用：配置无效（已保留原文件）。')
+            return
+        if self.data is None:
+            self.catalog_path.set('接管不可用：无可用模型目录服务。')
+            return
+        state = self.takeover_panel.refresh_state()
+        record = self._config.takeover_import or {}
+        active = (state.active_path if state else record.get('activePath')) or '未确定（导入时选择）'
+        pending = (state.pending_path if state else record.get('pendingPath')) or '未配置'
+        imported = '已导入副本' if record.get('importedAt') else '尚未导入副本'
+        self.catalog_path.set(
+            f'生效配置引用目录（Codex 实际读取）：{active}\n'
+            f'待应用目录（管理器编辑，尚未生效）：{pending} — {imported}')
+        try:
+            self._snapshot = self.takeover_panel.snapshot()
+            self._last_err = ''
+        except Exception as exc:  # noqa: BLE001
+            self._snapshot = None
+            self._last_err = str(exc)
+            self.status.set(f'待应用目录读取失败：{exc}')
+        self._render_list()
+
     def _render_list(self):
         self.listbox.delete(0, tk.END)
         self._models_cache = self._visible_models()
         for m in self._models_cache:
-            tag = "自定义" if m.source == "custom" else "官方"
+            tag = {"configured": "配置引用", "custom": "自定义",
+                   "pending": "待应用"}.get(m.source, "官方")
             self.listbox.insert(tk.END, f"[{tag}] {m.slug} — {m.display_name}")
 
     def show_detail(self):
@@ -441,9 +674,11 @@ class CodexModelManagerApp:
         if not sel or not self._models_cache:
             return
         m = self._models_cache[sel[0]]
+        source = {"configured": "配置引用（只读）", "custom": "自定义",
+                  "pending": "待应用（接管，可编辑）"}.get(m.source, "官方")
         text = (
             f"slug: {m.slug}\n"
-            f"来源: {'自定义' if m.source == 'custom' else '官方'}\n"
+            f"来源: {source}\n"
             f"名称: {m.display_name}\n"
             f"描述: {m.description}\n"
             f"当前上下文: {m.context_window}\n"
@@ -459,6 +694,9 @@ class CodexModelManagerApp:
         self.detail.configure(state="disabled")
 
     def sync(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         if self._syncing:
             messagebox.showinfo("同步", "同步正在进行中，请稍候。")
             return
@@ -466,7 +704,11 @@ class CodexModelManagerApp:
             messagebox.showwarning("不可同步", "当前无可用 Codex 运行时。请先用“设置 Codex 运行时…”选择，或改用离线预览。")
             return
 
-        service = self.data  # capture now; a runtime swap must not affect this run
+        captured = copy.deepcopy(self._config)
+        class SyncService:
+            def run_sync(self):
+                return CatalogDataService(captured.resolved()).run_sync()
+        service = SyncService()
         self._syncing = True
         self._update_status()
         run_sync_in_background(
@@ -502,7 +744,45 @@ class CodexModelManagerApp:
         self._reload()
         self.status.set("已保存运行时设置。")
 
+    # ---- takeover plumbing (the panel owns the widgets and decisions) ----
+
+    def _current_config(self):
+        return self._config
+
+    def _set_status(self, text: str) -> None:
+        self.status.set(text)
+
+    def _after_takeover_change(self, select_pending: bool = False) -> None:
+        """Reload state after a takeover step; optionally switch to the pending view."""
+        if select_pending:
+            self.catalog_view.set(VIEW_PENDING)
+        self.refresh()
+        try:
+            self.takeover_panel.refresh_state()
+        except Exception:  # noqa: BLE001 - the panel reports its own errors
+            pass
+
+    def _pending_catalog_path(self):
+        """The manager's pending catalog, or None when takeover is not configured."""
+        from ..core import takeover
+
+        if self._config is None:
+            return None
+        try:
+            return takeover.pending_write_path(self._config)
+        except CodexModelError:
+            return None
+
+    def _load_pending_snapshot(self, pending_path: str):
+        """Read the pending catalog through the data service, tagging it 'pending'."""
+        if self.data is None:
+            return None
+        return self.data.load_catalog_snapshot(pending_path, source="pending")
+
     def add_model(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         if not self._snapshot or not self._snapshot.models:
             messagebox.showwarning("暂无模型", "请先同步获取模型目录。")
             return
@@ -512,6 +792,15 @@ class CodexModelManagerApp:
 
     def _on_add_model(self, draft: NewModelDraft):
         try:
+            if self.catalog_view.get() == VIEW_PENDING:
+                pending = self._pending_catalog_path()
+                if not pending:
+                    messagebox.showwarning("暂无待应用目录", "请先“从现有目录导入副本”。")
+                    return
+                self.data.add_model_to(draft, pending)
+                self.refresh()
+                self.status.set(f"已新增 {draft.normalized_slug} 到待应用目录，尚未写回")
+                return
             self.data.add_custom_model(draft)
             self.refresh()
             self.status.set(f"已新增 {draft.normalized_slug}，请同步后生效")
@@ -519,15 +808,40 @@ class CodexModelManagerApp:
             messagebox.showerror("新增失败", str(exc))
 
     def edit_reasoning(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         sel = self.listbox.curselection()
         if not sel:
             messagebox.showinfo("提示", "请在列表中选择一个自定义模型。")
             return
         m = self._models_cache[sel[0]]
+        if self.catalog_view.get() == VIEW_PENDING:
+            # In the takeover view every entry is editable, whether it started life
+            # as an official or a custom model.
+            if m.source != "pending":
+                messagebox.showinfo("提示", "请先在“待应用目录（接管）”视图中选择模型。")
+                return
+            EditModelDialog(self.root, m, lambda edit: self._on_edit_pending(m.slug, edit))
+            return
         if m.source != "custom":
             messagebox.showinfo("提示", "官方模型的推理档位随目录同步，详情中只读。")
             return
         ReasoningDialog(self.root, m.slug, m.reasoning, lambda s: self._on_reasoning(m.slug, s))
+
+    def _on_edit_pending(self, slug, edit):
+        """Apply an edit to the pending catalog. Writes only that file, never Codex's."""
+        pending = self._pending_catalog_path()
+        if not pending:
+            messagebox.showwarning("暂无待应用目录", "请先“从现有目录导入副本”。")
+            return
+        try:
+            self.data.update_model_in(edit, slug, pending)
+            self.refresh()
+            self.takeover_panel.refresh_state()
+            self.status.set(f"已更新待应用目录中的 {slug}（尚未写回生效目录）")
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("更新失败", str(exc))
 
     def _on_reasoning(self, slug, settings):
         try:
@@ -538,6 +852,9 @@ class CodexModelManagerApp:
             messagebox.showerror("更新失败", str(exc))
 
     def backup(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         try:
             paths = self._config.resolved_paths()
             p1 = backup_file(paths.custom_source, paths.backup_directory, prefix="custom-models")
@@ -547,6 +864,9 @@ class CodexModelManagerApp:
             messagebox.showerror("备份失败", str(exc))
 
     def restore(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         if self._config is None:
             messagebox.showerror("不可恢复", self._config_error or "配置不可用。")
             return
@@ -598,6 +918,9 @@ class CodexModelManagerApp:
             messagebox.showerror("恢复失败", str(exc))
 
     def apply_to_codex(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         """Explicit, gated write. Target comes ONLY from config.codexConfigPath
         (never re-derived from the environment), and is validated by the shared
         apply_gate(): demo writes only inside the app sandbox, real mode only with
@@ -716,6 +1039,9 @@ class CodexModelManagerApp:
             messagebox.showerror("诊断失败", str(exc), parent=self.root)
 
     def undo_apply(self):
+        if self.catalog_view.get() == 'Codex 配置引用（只读）':
+            messagebox.showinfo('只读目录', '这是 Codex 配置引用的目录。若要编辑或应用，请先切换到“管理器编辑目录”。', parent=self.root)
+            return
         """Undo the last apply of model_catalog_json, with conflict detection."""
         from ..core.config_editor import undo_model_catalog
 

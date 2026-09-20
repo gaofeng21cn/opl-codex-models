@@ -13,7 +13,7 @@
 
 ## Windows 版（本 fork）
 
-Python/tkinter Windows 实现位于 [windows/](windows/README.md)，包含模型目录管理、可选本地 Responses 桥与只读诊断。安装与使用请查看该目录的 README；以下说明适用于原 macOS 版。
+Python/tkinter Windows 实现位于 [windows/](windows/README.md)，包含模型目录管理、可选本地 Responses 桥与只读诊断。可直接从本 fork 的 [Releases](https://github.com/lifelover26/opl-codex-models/releases) 下载 **CodexModelManager-Windows-portable.zip**；源码运行和完整说明见 Windows README。以下说明适用于原 macOS 版。
 
 ## 安装
 

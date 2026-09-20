@@ -456,6 +456,9 @@ def test_gui_importable_without_display_and_survives_missing_config(tmp_path, mo
     # there is no native runtime and no path set).
     from codex_model_manager.core.errors import RuntimeNotFound
     from codex_model_manager.core.app_config import AppConfiguration
+    # This is the no-runtime branch, even on a machine with Codex now installed.
+    monkeypatch.setattr("codex_model_manager.core.runtime.find_native", lambda *a, **k: None)
+    monkeypatch.setattr("codex_model_manager.core.app_config._discover_wsl", lambda: [])
 
     cfg = AppConfiguration(
         codex_runtime_path=None,   # no runtime

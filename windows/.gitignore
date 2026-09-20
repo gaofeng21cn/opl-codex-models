@@ -22,3 +22,9 @@ capture/
 Thumbs.db
 .vscode/
 .idea/
+
+# Portable GUI build and private preferences
+build/
+dist/
+*.spec
+user-data/

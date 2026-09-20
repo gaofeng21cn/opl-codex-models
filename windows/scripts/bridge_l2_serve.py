@@ -45,6 +45,11 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=8799)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--record", help="脱敏取证 JSONL 输出路径（仅元数据）")
+    parser.add_argument("--protocol", choices=("function", "native"), default="function",
+                        help="function=协议兼容；native=保留原工具协议，可单独测试上下文纠偏")
+    parser.add_argument("--context-recovery", action="store_true",
+                        help="在请求副本中纠正旧无工具诊断；原任务历史不变，须指定 --only-model")
+    parser.add_argument("--experiment-mode-file", help="本地四组试验模式文件，按请求读取，不自动重试")
     parser.add_argument(
         "--capture",
         help="离线回放取证目录（原始上游响应 + 实际发出的 SSE）。"
@@ -67,6 +72,9 @@ def main(argv=None) -> int:
         record_path=args.record,
         capture_dir=args.capture,
         scoped_models=frozenset(args.only_model) if args.only_model else None,
+        protocol_translation=args.protocol == "function",
+        context_recovery=args.context_recovery,
+        experiment_mode_file=args.experiment_mode_file,
     )
     threading.Thread(target=bridge.serve_forever, daemon=True).start()
     if not bridge.wait_ready():

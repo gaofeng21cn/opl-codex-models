@@ -161,19 +161,112 @@ def add_from_template(
     return _dumps(root)
 
 
-def update_reasoning(settings: ReasoningSettings, slug: str, source_data: bytes) -> bytes:
+class ModelEdit:
+    """An explicit, per-field edit of one existing catalog model.
+
+    Only the fields that are set are touched; everything else in the model (and
+    every other model, and every unknown top-level key) is carried over verbatim.
+    ``None`` therefore means "leave as-is", not "clear" - which is what makes an
+    edit of a model the user did not author safe to apply.
+    """
+
+    def __init__(
+        self,
+        context_window: Optional[int] = None,
+        max_context_window: Optional[int] = None,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+        reasoning: Optional[ReasoningSettings] = None,
+    ):
+        self.context_window = context_window
+        self.max_context_window = max_context_window
+        self.display_name = display_name
+        self.description = description
+        self.reasoning = reasoning
+
+    @property
+    def is_empty(self) -> bool:
+        return (
+            self.context_window is None
+            and self.max_context_window is None
+            and self.display_name is None
+            and self.description is None
+            and self.reasoning is None
+        )
+
+
+def _positive_int(value, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise InvalidConfiguration(f"{field} 必须是正整数：{value!r}")
+    return value
+
+
+def update_model(
+    edit: ModelEdit,
+    slug: str,
+    source_data: bytes,
+    name: str = "模型源",
+) -> bytes:
+    """Edit one existing model in place, preserving every other field.
+
+    Any catalog document with a ``models`` array works, so the same call edits the
+    manager's custom source and a taken-over catalog. Unknown fields on the edited
+    model survive, unknown top-level keys survive, and the other models are
+    returned unchanged. The result is re-validated with the shared catalog rules
+    (:func:`validate_models`) so an edit can never produce one the writers reject.
+    """
+    if edit.is_empty:
+        raise InvalidConfiguration("没有要修改的字段。")
+
     root = _loads(source_data)
     models = root.get("models")
     if not isinstance(models, list):
-        raise InvalidCatalog("模型源 models 必须是数组")
+        raise InvalidCatalog(f"{name} models 必须是数组")
     index = next(
         (i for i, m in enumerate(models) if isinstance(m, dict) and m.get("slug") == slug),
         None,
     )
     if index is None:
-        raise InvalidConfiguration("只能编辑自定义模型源中已有模型的推理配置。")
+        raise InvalidConfiguration(f"{name}中找不到模型：{slug}")
+
     model = dict(models[index])
-    _apply_reasoning(settings, model)
-    models[index] = model
-    root["models"] = models
+    if edit.display_name is not None:
+        display_name = " ".join(edit.display_name.split())
+        if not display_name:
+            raise InvalidConfiguration("模型名称不能为空。")
+        model["display_name"] = display_name
+    if edit.description is not None:
+        model["description"] = " ".join(edit.description.split())
+    if edit.context_window is not None:
+        context = _positive_int(edit.context_window, "当前上下文")
+        model["context_window"] = context
+        if model.get("max_context_window") is None:
+            # Keep the pair consistent, exactly as add_from_template does when a
+            # model is created; only when the max was absent altogether.
+            model["max_context_window"] = context
+    if edit.max_context_window is not None:
+        model["max_context_window"] = _positive_int(
+            edit.max_context_window, "最大上下文")
+
+    current = model.get("context_window")
+    maximum = model.get("max_context_window")
+    if isinstance(current, int) and isinstance(maximum, int) and maximum < current:
+        raise InvalidConfiguration(
+            f"最大上下文不能小于当前上下文（{maximum} < {current}）。")
+
+    if edit.reasoning is not None:
+        _apply_reasoning(edit.reasoning, model)
+
+    new_models = list(models)
+    new_models[index] = model
+    root["models"] = new_models
+
+    from .safe_preview import validate_models
+
+    validate_models(new_models, require_priority=False, allow_empty=True, name=name)
     return _dumps(root)
+
+
+def update_reasoning(settings: ReasoningSettings, slug: str, source_data: bytes) -> bytes:
+    """Edit only the reasoning levels/default of an existing model."""
+    return update_model(ModelEdit(reasoning=settings), slug, source_data)

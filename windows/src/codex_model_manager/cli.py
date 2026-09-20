@@ -158,6 +158,122 @@ def cmd_restore(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Takeover: bring the catalog Codex actually reads under management.
+# ---------------------------------------------------------------------------
+
+def _save(config, args) -> None:
+    """Persist app state (import/apply/undo records) to the config we loaded."""
+    config.save(args.config or AppConfiguration.default_url())
+
+
+def cmd_takeover_import(args) -> int:
+    """Copy the active catalog into the manager's pending catalog (preserving all)."""
+    from .core import takeover
+
+    config = _config(args)
+    record = takeover.import_active(config, args.active, create_empty=args.create_empty)
+    _save(config, args)
+    print("已导入副本，接管进入“待应用”状态（尚未影响 Codex 读取的目录）。")
+    print(f"  生效配置引用目录：{record['activePath']}")
+    print(f"  待应用目录：{record['pendingPath']}")
+    print(f"  模型数：{record['modelCount']}")
+    for warning in record.get("structureWarnings") or []:
+        print(f"  提示：{warning}")
+    print("下一步：编辑待应用目录（edit-model / add），再用 takeover-diff 查看差异。")
+    return 0
+
+
+def cmd_takeover_diff(args) -> int:
+    """Read-only: show both directories and the pending-vs-active difference."""
+    from .core import takeover
+
+    config = _config(args)
+    state = takeover.inspect(config, args.active)
+    print(takeover.render_state(state))
+    print("（只读预览：未写入、未备份、未创建任何文件。）")
+    return 0
+
+
+def cmd_takeover_apply(args) -> int:
+    """Explicitly write the pending catalog back over the active path.
+
+    Gated by the same sandbox/compatibility checks as `apply`; refused when the
+    active catalog changed after import, and refused when the write-back would drop
+    existing models unless --confirm-removals is given.
+    """
+    from .core import takeover
+
+    config = _config(args)
+    state = takeover.inspect(config, args.active)
+    print(takeover.render_state(state))
+    if not state.ready:
+        problems = [p for p in (state.pending_error, state.conflict, state.gate_reason) if p]
+        print("！（只读）未写入：" + (problems[0] if problems else "接管尚未就绪（请先导入）。"))
+        return 1
+    result = takeover.apply_pending(
+        config, active_path=args.active,
+        confirm_removals=args.confirm_removals, allow_create=args.allow_create,
+        persist=lambda: _save(config, args))
+    print(result.message)
+    if result.applied:
+        print(f"  差异：{result.diff_summary}")
+        if result.backup_path:
+            print(f"  原文件已备份：{result.backup_path}")
+        print("  可用 `takeover-undo` 撤销本次写回。")
+    return 0
+
+
+def cmd_takeover_undo(args) -> int:
+    """Undo the last takeover write-back (with conflict detection)."""
+    from .core import takeover
+
+    config = _config(args)
+    message = takeover.undo_pending(config)
+    _save(config, args)
+    print(message)
+    return 0
+
+
+def cmd_edit_model(args) -> int:
+    """Safe edit of one existing model in a catalog (default: the pending catalog).
+
+    Only the fields you pass are touched; unknown fields, other models and unknown
+    top-level keys are preserved. Backed up and written atomically.
+    """
+    from .core import takeover
+    from .core.backup import atomic_write, backup_file
+    from .core.custom_models import ModelEdit, update_model
+
+    config = _config(args)
+    target = takeover.pending_write_path(config, args.catalog)
+    settings = None
+    if args.efforts or args.default:
+        if not (args.efforts and args.default):
+            raise CodexModelError("--efforts 与 --default 必须同时给出。")
+        supported = [e.strip() for e in args.efforts.split(",") if e.strip()]
+        settings = ReasoningSettings(supported_efforts=supported, default_effort=args.default)
+    edit = ModelEdit(
+        context_window=args.context_window,
+        max_context_window=args.max_context_window,
+        display_name=args.name,
+        description=args.description,
+        reasoning=settings,
+    )
+    if edit.is_empty:
+        raise CodexModelError("没有要修改的字段：请至少给出 --context-window/--max-context-window/"
+                              "--efforts+--default/--name/--description 之一。")
+    source_data = Path(target).read_bytes()
+    updated = update_model(edit, args.slug, source_data, name=Path(target).name)
+    if updated == source_data:
+        print(f"无变化：{args.slug}（未写入、未备份）。")
+        return 0
+    backup_file(target, config.resolved_paths().backup_directory, prefix="custom-models")
+    atomic_write(target, updated)
+    print(f"已更新 {args.slug} -> {target}")
+    return 0
+
+
 def cmd_apply(args) -> int:
     """Explicitly wire the merged catalog into a Codex config.toml.
 
@@ -452,7 +568,8 @@ def cmd_bridge_disable(args) -> int:
 
 
 def cmd_bridge_start(args) -> int:
-    from .core.bridge import ensure_loopback, run_bridge
+    from .core.bridge import BridgeServer, ensure_loopback, run_bridge
+    from .core.tool_recovery import policy
 
     config = _config(args)
     upstream = args.upstream or config.bridge_upstream_url
@@ -466,7 +583,17 @@ def cmd_bridge_start(args) -> int:
         raise CodexModelError(str(exc)) from exc
     port = int(args.port or config.bridge_port or 8787)
     scoped = frozenset(args.only_model) if getattr(args, "only_model", None) else None
+    if not upstream.startswith(("http://", "https://")):
+        raise CodexModelError("bridge upstream_url 必须是 http:// 或 https:// 地址")
+    try:
+        BridgeServer(upstream_url=upstream, host=host, port=port, scoped_models=scoped,
+                     protocol_translation=args.protocol == "function", context_recovery=args.context_recovery,
+                     experiment_mode_file=args.experiment_mode_file, record_path=args.record)
+        mode, _, _ = policy(args.experiment_mode_file, args.protocol == "function", args.context_recovery)
+    except (ValueError, OSError) as exc:
+        raise CodexModelError(str(exc) if isinstance(exc, ValueError) else "试验模式文件不可读取") from exc
     print(f"本地桥运行中：http://{host}:{port} -> {upstream}")
+    print(f"补丁模式：{mode}（off=关闭，protocol=协议，context=上下文，both=两者）")
     print(
         "翻译范围：%s"
         % (", ".join(sorted(scoped)) if scoped else "全部（未启用 --only-model）")
@@ -478,7 +605,9 @@ def cmd_bridge_start(args) -> int:
         )
     print("按 Ctrl+C 停止；API Key 仅透传 Codex 请求头，不写入本地桥。")
     try:
-        run_bridge(upstream, host, port, scoped_models=scoped)
+        run_bridge(upstream, host, port, scoped_models=scoped,
+                   protocol_translation=args.protocol == "function", context_recovery=args.context_recovery,
+                   experiment_mode_file=args.experiment_mode_file, record_path=args.record)
     except ValueError as exc:  # upstream URL validation
         raise CodexModelError(str(exc)) from exc
     return 0
@@ -571,6 +700,39 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="只读预览，不写入、不备份")
     s.set_defaults(func=cmd_apply)
 
+    s = sub.add_parser(
+        "takeover-import",
+        help="接管：把 Codex 当前引用的模型目录复制到管理器待应用目录（保留未知字段）")
+    s.add_argument("--active", help="生效配置引用目录的模型 JSON；默认读取 codexConfigPath 的 model_catalog_json")
+    s.add_argument("--create-empty", action="store_true",
+                   help="活跃目录不存在时，改为创建一个空白的待应用目录")
+    s.set_defaults(func=cmd_takeover_import)
+
+    s = sub.add_parser("takeover-diff", help="接管：只读显示生效目录与待应用目录的差异")
+    s.add_argument("--active", help="生效配置引用目录的模型 JSON")
+    s.set_defaults(func=cmd_takeover_diff)
+
+    s = sub.add_parser("takeover-apply", help="接管：将待应用目录显式写回生效目录（带确认与备份）")
+    s.add_argument("--active", help="生效配置引用目录的模型 JSON")
+    s.add_argument("--confirm-removals", action="store_true",
+                   help="显式确认：允许本次写回删除活跃目录中已有的模型")
+    s.add_argument("--allow-create", action="store_true", help="允许在活跃目录不存在时新建文件")
+    s.set_defaults(func=cmd_takeover_apply)
+
+    s = sub.add_parser("takeover-undo", help="接管：撤销最近一次写回（带冲突检测）")
+    s.set_defaults(func=cmd_takeover_undo)
+
+    s = sub.add_parser("edit-model", help="安全编辑已有模型（默认编辑待应用目录）")
+    s.add_argument("slug")
+    s.add_argument("--catalog", help="待应用目录 JSON；如提供，必须与配置中的 takeoverCatalogPath 相同")
+    s.add_argument("--context-window", type=int)
+    s.add_argument("--max-context-window", type=int)
+    s.add_argument("--efforts", help="支持的推理档位，逗号分隔，如 low,high,max")
+    s.add_argument("--default", help="默认推理档位（必须在 --efforts 中）")
+    s.add_argument("--name")
+    s.add_argument("--description")
+    s.set_defaults(func=cmd_edit_model)
+
     s = sub.add_parser("probe", help="探测本地运行时")
     s.add_argument("--codex")
     s.add_argument("--wsl", action="store_true", help="同时列出 WSL 下的 Linux 二进制（不影响原生判定）")
@@ -602,6 +764,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--upstream")
     r.add_argument("--host")
     r.add_argument("--port", type=int)
+    r.add_argument("--protocol", choices=("function", "native"), default="function",
+                   help="function=协议兼容，native=保留原工具协议")
+    r.add_argument("--context-recovery", action="store_true", help="只纠偏发给模型的历史副本，须配合 --only-model")
+    r.add_argument("--experiment-mode-file", help="按请求读取四组试验模式文件")
+    r.add_argument("--record", help="只记录工具/试验元数据的 JSONL")
     r.add_argument(
         "--only-model",
         action="append",

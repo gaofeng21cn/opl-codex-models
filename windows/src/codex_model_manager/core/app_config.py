@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Dict, Optional
 
 from .backup import atomic_write
@@ -20,6 +20,23 @@ from .overrides import ModelFieldOverrides
 
 APP_FOLDER = "CodexModelManager"
 LABEL = "com.onepersonlab.codex-model-manager.sync"
+
+
+def _default_takeover_catalog_path(merged_catalog_path: str = "") -> str:
+    """Place the pending takeover copy beside the manager-owned merged catalog.
+
+    Older configuration files predate ``takeoverCatalogPath``.  Deriving the new
+    path keeps those installations usable without rewriting their config merely
+    because the GUI was opened.  ``PureWindowsPath`` preserves a Windows path when
+    the config is inspected from WSL or another POSIX process.
+    """
+    raw = (merged_catalog_path or "").strip()
+    if raw:
+        win = PureWindowsPath(raw)
+        if win.drive or "\\" in raw:
+            return str(win.with_name("pending-models.json"))
+        return str(Path(raw).expanduser().with_name("pending-models.json"))
+    return str(_appdata_dir() / APP_FOLDER / "pending-models.json")
 
 
 def _appdata_dir() -> Path:
@@ -65,6 +82,13 @@ class AppConfiguration:
     # Undo restores the previous value (or deletes the key) with conflict
     # detection against the current value.
     last_apply: Optional[Dict] = None
+    # Takeover of an existing catalog: the manager's own *pending* (待应用) copy of
+    # the catalog the selected config.toml references, plus the import record used
+    # for conflict detection and for showing both directories side by side.
+    takeover_catalog_path: Optional[str] = None
+    takeover_import: Optional[Dict] = None
+    # Undo record of the last takeover write-back (active path, backup, hashes).
+    last_takeover: Optional[Dict] = None
     # Optional local Responses compatibility bridge. Disabled by default; the
     # bridge forwards Codex's bearer header and never stores credentials.
     bridge_enabled: bool = False
@@ -103,6 +127,7 @@ class AppConfiguration:
             backup_directory_path=str(app_dir / "Backups"),
             codex_config_path=None,  # only set explicitly; never derived from env
             is_demo=False,  # default preview/real; demo configs set this true
+            takeover_catalog_path=str(app_dir / "pending-models.json"),
         )
 
     def to_json(self) -> dict:
@@ -120,6 +145,9 @@ class AppConfiguration:
             "isDemo": self.is_demo,
             "compatEvidence": self.compat_evidence or None,
             "lastApply": self.last_apply or None,
+            "takeoverCatalogPath": self.takeover_catalog_path,
+            "takeoverImport": self.takeover_import or None,
+            "lastTakeover": self.last_takeover or None,
             "bridgeEnabled": self.bridge_enabled,
             "bridgeHost": self.bridge_host,
             "bridgePort": self.bridge_port,
@@ -136,10 +164,14 @@ class AppConfiguration:
 
     @classmethod
     def from_json(cls, data: dict) -> "AppConfiguration":
+        merged_catalog_path = data.get("mergedCatalogPath", "")
+        takeover_catalog_path = data.get("takeoverCatalogPath")
+        if not isinstance(takeover_catalog_path, str) or not takeover_catalog_path.strip():
+            takeover_catalog_path = _default_takeover_catalog_path(merged_catalog_path)
         return cls(
             codex_runtime_path=data.get("codexRuntimePath"),
             custom_source_path=data.get("customSourcePath", ""),
-            merged_catalog_path=data.get("mergedCatalogPath", ""),
+            merged_catalog_path=merged_catalog_path,
             sync_log_path=data.get("syncLogPath", ""),
             error_log_path=data.get("errorLogPath", ""),
             backup_directory_path=data.get("backupDirectoryPath", ""),
@@ -150,6 +182,9 @@ class AppConfiguration:
             is_demo=bool(data.get("isDemo", False)),
             compat_evidence=data.get("compatEvidence"),
             last_apply=data.get("lastApply"),
+            takeover_catalog_path=takeover_catalog_path,
+            takeover_import=data.get("takeoverImport"),
+            last_takeover=data.get("lastTakeover"),
             bridge_enabled=bool(data.get("bridgeEnabled", False)),
             bridge_host=data.get("bridgeHost", "127.0.0.1") or "127.0.0.1",
             bridge_port=int(data.get("bridgePort", 8787) or 8787),

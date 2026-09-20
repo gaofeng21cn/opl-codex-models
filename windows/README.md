@@ -1,5 +1,9 @@
 # Codex Model Manager — Windows 移植版
 
+**新增 Windows 图形连接管理。** 便携包解压后双击 `CodexModelManager.exe`，源码可双击 `Start.cmd`。详见 [QUICKSTART.md](QUICKSTART.md)。
+
+首页支持启动桥、0/A/B/AB 切换、GPT / DeepSeek / 两者作用范围、重启桥、恢复直连和诊断导出，自动选择 Windows / WSL 后端。无需 WSL 终端；打开界面不修改 Codex 配置。
+
 **当前版本：0.1.0 release candidate**。Windows 目标环境的完整测试已通过；发布前只需在
 目标 Windows checkout 中按下方命令复跑一次，并确认桥保持默认关闭。
 
@@ -45,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\offline_demo.ps1
 `probe → sync → list → add → reasoning → 二次 sync(no_change) → backup → apply --dry-run`。
 所有结果都是**模拟验证**，已明确标识。
 
-### 2) 启动 GUI（同样走 mock，纯模拟）
+### 2) 启动 GUI（默认真实管理界面；模拟界面追加 -Demo）
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\launch_gui.ps1
@@ -94,6 +98,40 @@ $py = ".\\.venv\\Scripts\\python.exe"
 > 读取官方目录时才会临时隔离 `CODEX_HOME`。Windows 与 WSL 的运行时被明确区分。
 > `apply` 的目标 config.toml 只取自 `codexConfigPath` 或 `--codex-config`，绝不会从环境推导。
 
+## 接管已有目录（生效目录 ↔ 待应用目录）
+
+Codex 实际读取的是 config.toml 里 `model_catalog_json` 指向的那个文件，它通常在手写目录里、
+位于管理器沙箱之外。接管流程把这份现有目录纳入管理，且不会悄悄删掉你已有的模型：
+
+```powershell
+# 1) 把 Codex 当前引用的目录复制成管理器的“待应用目录”（保留全部未知字段；
+#    默认从 codexConfigPath 的 model_catalog_json 读取，也可用 --active 显式指定）
+& $py -m codex_model_manager --config <cfg> takeover-import
+
+# 2) 编辑副本（默认编辑待应用目录；只改给出的字段，未知字段与其他模型不动）
+& $py -m codex_model_manager --config <cfg> edit-model gpt-6-astra --context-window 262144 --max-context-window 262144
+& $py -m codex_model_manager --config <cfg> edit-model gpt-6-astra --efforts low,high,max --default max
+
+# 3) 只读查看差异：新增 / 修改 / 删除，删除会被单独标出
+& $py -m codex_model_manager --config <cfg> takeover-diff
+
+# 4) 写回生效目录（先显示差异并需确认；删除已有模型要 --confirm-removals）
+& $py -m codex_model_manager --config <cfg> takeover-apply
+& $py -m codex_model_manager --config <cfg> takeover-apply --confirm-removals
+
+# 5) 撤销写回（仅在目录仍等于上次写回值时才恢复，否则报冲突）
+& $py -m codex_model_manager --config <cfg> takeover-undo
+```
+
+同一套流程在 GUI 的「模型管理」页上：顶部固定显示`生效配置引用目录（Codex 实际读取）`与
+`待应用目录（管理器编辑，尚未生效）`，并列出「从现有目录导入副本…」「差异预览（只读）」
+「写回生效目录…」「撤销写回」；把视图切到`待应用目录（接管）`后，列表里的每个模型都可编辑
+（推理档位、默认档位、上下文、名称/描述），也可新增。
+
+安全语义：写入前自动备份原文件、原子替换；待应用目录结构非法则拒绝；生效目录在导入后被外部
+修改则拒绝并提示重新导入；删除已有模型必须显式确认；演示模式沿用同一套沙箱限制，真实模式仍
+要求绑定当前运行时的有效兼容性证据。只读写模型目录 JSON，不改 config.toml、不碰凭据。
+
 ## 本地桥（可选，默认关闭）
 
 **为什么需要它**：Codex 把 `exec` 工具作为 Responses 的 `custom` 工具发送
@@ -108,8 +146,7 @@ Unsupported custom tool: 'exec'
 `functions__` 前缀**），再把上游返回的 `function_call` 还原成 Codex 期望的
 `custom_tool_call`，`call_id` 原样保留。
 
-> **默认关闭，且是一个开关而不是自启动。** 桥不开机启动、不驻留；`bridge enable`
-> 只改 `model_providers.<provider>.base_url` 这一项，桥进程要你自己在另一个终端启动。
+> **默认关闭，不开机自启动。** GUI 首页管理后台桥，健康检查后切换地址，恢复直连后停止服务。关闭窗口不停桥。以下 CLI 命令仅供开发使用，日常操作不需要终端。
 
 ```powershell
 # 1) 确认默认是关闭的
@@ -126,7 +163,7 @@ Unsupported custom tool: 'exec'
 & $py -m codex_model_manager --config <cfg> bridge disable
 ```
 
-GUI 里对应「**启用本地桥…**」/「**关闭本地桥**」两个按钮：会先弹出 `旧地址 -> 新地址`
+GUI 首页对应「**启动并启用桥**」/「**恢复直连并停止**」两个按钮：会先弹出 `旧地址 -> 新地址`
 的差异确认，只改这一个键，取消则不写任何内容。
 
 **安全约束（已由测试锁定）**
@@ -249,6 +286,9 @@ L1 会断言：`additional_tools` 信封被剥离、`exec` 降为 `function` 且
 桌面客户端启用本地桥的操作手册（配置差异 / 启动命令 / 关闭与恢复 / 限制）：
 [desktop-enable.md](desktop-enable.md)。
 
+GPT 间歇性工具不可用的两个可选实验补丁（协议兼容 / 上下文纠偏）、独立开关与四组比较：
+[TOOL_RECOVERY.md](TOOL_RECOVERY.md)。该功能未宣称已根治真实 GPT 故障；原任务历史保持不变。
+
 ## 目录结构
 
 ```
@@ -287,7 +327,7 @@ integration-evidence/    # 真实 WSL 接入 + L2 协议闭环 + Codex 隔离验
 
 ## 验证情况（详见 HANDOFF.md）
 
-- **模拟验证**：与原始 Swift 测试语义对齐的合并/覆盖/自定义/TOML/备份/中文空格路径/子进程失败与超时用例全部通过，另有验收整改的回归用例。当前 Windows 虚拟环境全套 `pytest tests -q -rs` 为 **143 passed**；受限环境若无法创建符号链接，symlink 越界用例会按平台能力跳过。`apply --diff/--dry-run` 严格只读、安全预览不回显密钥、恢复按内容类型校验、`recommended()` 落应用沙箱、演示流程不改真实 CODEX_HOME、probe 只报告已验证能力、无运行时/无显示下 GUI 可安全 import 等均已覆盖；三个 P2/P1 写入限制修复（演示目标 `..`/符号链接越界写、模型目录结构校验、无运行时离线预览）见 [HANDOFF.md](HANDOFF.md) 第 14 节；合法空自定义模型源可恢复（`models=[]` 仅 custom 允许、merged/apply 仍拒绝）见第 15 节。**Windows junction 越界已由新增的可运行用例实测拒绝**（第 17.6 节）。mock CLI 全流程跑通。
+- **模拟验证**：与原始 Swift 测试语义对齐的合并/覆盖/自定义/TOML/备份/中文空格路径/子进程失败与超时用例全部通过，另有验收整改的回归用例。当前 Windows 虚拟环境全套 `pytest tests -q -rs` 为 **230 passed，1 skipped**（2026-09-20，本机跳过符号链接权限项）；受限环境若无法创建符号链接，symlink 越界用例会按平台能力跳过。`apply --diff/--dry-run` 严格只读、安全预览不回显密钥、恢复按内容类型校验、`recommended()` 落应用沙箱、演示流程不改真实 CODEX_HOME、probe 只报告已验证能力、无运行时/无显示下 GUI 可安全 import 等均已覆盖；接管流程还覆盖显式目标一致性、任意目录写入拒绝、旧配置迁移、写回前持久化撤销记录与删除确认。**Windows junction 越界已由可运行用例实测拒绝**。mock CLI 全流程跑通。
 - **真实 WSL 接入（第六轮）**：已从"离线原型"推进到"真实 WSL 后端可用、用户可显式启用"。实测链路 `Windows → wsl.exe --distribution Ubuntu --exec env CODEX_HOME=<linux> <runtime> ...`（参数数组，不用 `bash -lc`）跑通；运行时身份 `codex-cli 0.155.0-alpha.9`、distro `Ubuntu`、SHA256 `b544b069…d82e`。兼容性探测 `probe --verify` 产生绑定运行时身份的证据（`probe_scheme=wsl-adapter-v1`），含正控制（加载 `model_catalog_json`、`marker_loaded=true`）与负控制（bundled 不含 marker、缺目录退出 1）。`apply` 在真实模式下改为**证据门控**：证据有效才允许写入，不再恒定拒绝；`undo` 可还原上一次 apply 并检测冲突。所有真实写入均在隔离的临时 `CODEX_HOME` 内完成，**不修改用户真实 `config.toml`/`auth.json`，不安装新 Codex，不发模型请求**。证据与可重跑脚本见 [integration-evidence/](integration-evidence/)，详见 [HANDOFF.md](HANDOFF.md) 第 16 节。
 - **本地桥（第七轮）**：CLI `bridge enable/start/disable/status` 与 GUI「启用/关闭本地桥」按钮已可用，**默认关闭**。`tests/test_bridge.py` 共 **48 项**（当前 WSL 环境可运行项通过；5 项 GUI 需 Windows/tkinter），含 wire 形状单测、注册映射与歧义拒绝、两会话同名不同类型工具的隔离、跨轮次语义保持、loopback 拒绝、demo 沙箱越界拒绝、SSE 帧格式回归（`output_item.done` + 连续 `sequence_number`）、**模型范围化直通**（范围外模型收发字节逐字节不变、不被捕获、`mode=passthrough` 记账），以及一个**内置假中转的 L1 端到端**用例（不依赖真实 Codex、不写真实配置）。CLI 沙箱冒烟实测走通「关闭 → 启用（改 base_url、留注释、留备份）→ 状态 → 关闭（逐字节还原）」，`0.0.0.0` 在 CLI 与数据模型两层都被拒绝。`gui_smoke.py --bridge` 真实驱动 GUI 方法完成启用/关闭往返。
 - **L2 真机联调（第八轮，真跑）**：`deepseek-v4.1-flash` 经本地桥对真实中转，协议闭环三条场景（`additional_tools`×low、顶层 `tools[]`×low、`additional_tools`×high）全部成立；随后用**真实 Codex 0.155.0-alpha.9.2**（隔离 `CODEX_HOME` + 进程级 `env_key` 注入凭据）完成四轮验收（列目录 → 写 `hello` → 下轮读回 → 改 `world` 读回）**全部 exit 0**，桥 8 个请求 `diagnostics=[]`，真实全局 `config.toml` sha256 前后一致。过程中定位并修复一个只在真实客户端暴露的缺陷：该 Codex **不处理 `response.output_item.added`**，桥只发 `added` 导致整轮被静默丢弃。证据：`integration-evidence/l2-protocol-loop.json`、`integration-evidence/l2-codex-acceptance.json`，详见 [HANDOFF.md](HANDOFF.md) 第 18 节。
@@ -324,6 +364,12 @@ GPT 偶发“没有 exec”与 DeepSeek 协议转换是两条独立链路。本�
 
 脚本会先备份目标，只修改 `deepseek-v4.1-flash` 条目的推理字段。
 
-## 下一轮
+## 后续范围
 
-完整自动同步（计划任务/常驻）、安装包（PyInstaller/Inno Setup）、真实 Windows 原生 Codex 集成（当前真实集成走 WSL 后端）、模型覆盖的 GUI 化字段级编辑、**GUI 桌面端内的人工验收**（本轮只跑同一 Codex 运行时；桌面点击需按 [desktop-enable.md](desktop-enable.md) 手动完成）、以及**客户端侧按线程选 provider**（协议已支持 `ThreadStartParams.modelProvider`，缺的是桌面端入口——那属于客户端改动）。
+完整自动同步（计划任务/常驻）、安装向导及自动更新（已有 PyInstaller 便携包）、真实 Windows 原生 Codex 集成（当前真实集成走 WSL 后端）、真实桌面客户端的人工回归，以及**客户端侧按线程选 provider**（协议已支持 `ThreadStartParams.modelProvider`，缺的是桌面端入口——那属于客户端改动）。这些不阻塞当前便携版发布。
+
+## 图形连接管理验证（2026-09-20）
+
+230 passed, 1 skipped（Windows 符号链接权限）。实际 tkinter 窗口测试覆盖启动、状态重连、四种模式、两模型范围、重启、逐字节恢复、模型页和接管流程；均使用临时配置与假上游。便携 EXE 的 native worker 通信、打包附带 WSL worker 从 Windows 查询当前桥均通过，真实配置哈希不变。
+
+本轮未替用户重启真实桥或发真实模型请求，不承诺永久修复 GPT 工具丢失。构建方式：Windows Python 安装 PyInstaller 后执行 `python scripts/build_windows.py`；产物 `dist/CodexModelManager-Windows-portable.zip`。WSL 后端需要 Python 3.11+。构建拒绝覆盖含 user-data 的便携目录。
