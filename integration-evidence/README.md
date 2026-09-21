@@ -28,7 +28,7 @@
 ## 如何重跑
 
 ```powershell
-cd windows
+cd opl-codex-models
 $env:PYTHONPATH = (Join-Path (Get-Location) "src")
 
 # A. 仅探测兼容性（生成 wsl-chain-evidence.json）
