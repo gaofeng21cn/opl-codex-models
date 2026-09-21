@@ -10,8 +10,7 @@
 发布命令和安全检查见 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)。
 
 在 Windows 上查看、编辑、合并、备份 Codex 官方模型与自定义模型的最小编译版。
-这是对 [gaofeng21cn/opl-codex-models](https://github.com/gaofeng21cn/opl-codex-models)
-（macOS/Swift）核心功能的重新实现。许可证与改动来源见 [SOURCE_NOTICE.md](SOURCE_NOTICE.md)。
+这是面向 Windows 的独立实现，基于 [gaofeng21cn/opl-codex-models](https://github.com/gaofeng21cn/opl-codex-models) 的模型目录能力扩展。许可证与改动来源见 [SOURCE_NOTICE.md](SOURCE_NOTICE.md)。
 
 > 默认运行在 **预览 / 沙箱模式**：`sync` 只在隔离的临时 `CODEX_HOME` 里读取官方目录并写到**独立应用沙箱**
 > 里的本地合并目录（默认 `%LOCALAPPDATA%\CodexModelManager`），**不会**改动你的真实 `~/.codex/config.toml`。
