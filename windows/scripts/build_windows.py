@@ -13,14 +13,16 @@ def main():
     if (ROOT/'dist/CodexModelManager/user-data').exists():
         raise SystemExit('Build stopped: dist contains user-data. Move the existing portable folder to a safe location before rebuilding.')
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
-               '--console', '--hide-console', 'hide-early', '--name', 'CodexModelManager',
                '--icon', str(ROOT/'src/codex_model_manager/gui/assets/app.ico'),
                '--paths', str(ROOT/'src'), '--collect-submodules', 'codex_model_manager', '--collect-all', 'sv_ttk',
                '--add-data', str(ROOT/'src/codex_model_manager') + ';bridge-runtime/src/codex_model_manager',
                '--add-data', str(ROOT/'scripts/bridge_worker.py') + ';bridge-runtime/scripts',
                str(ROOT/'scripts/desktop_entry.py')]
-    subprocess.run(command, cwd=ROOT, check=True)
+    # Both entry points share the same dependencies, but only the worker needs pipes.
+    subprocess.run(command + ['--console', '--name', 'CodexModelManagerWorker'], cwd=ROOT, check=True)
+    subprocess.run(command + ['--windowed', '--name', 'CodexModelManager'], cwd=ROOT, check=True)
     bundle = ROOT/'dist/CodexModelManager'
+    shutil.copy2(ROOT/'dist/CodexModelManagerWorker/CodexModelManagerWorker.exe', bundle)
     for name in ('QUICKSTART.md', 'README.md', 'LICENSE', 'SOURCE_NOTICE.md',
                  'THIRD_PARTY_NOTICES.txt', 'SUN_VALLEY_LICENSE.txt'):
         shutil.copy2(ROOT/name, bundle/name)

@@ -248,7 +248,9 @@ def stop_owned(state):
 
 
 def worker_command():
-    if getattr(sys, 'frozen', False): return [sys.executable, '--bridge-worker']
+    if getattr(sys, 'frozen', False):
+        worker = Path(sys.executable).with_name('CodexModelManagerWorker.exe')
+        return [str(worker), '--bridge-worker']
     return [sys.executable, '-B', str(Path(__file__).resolve().parents[3]/'scripts/bridge_worker.py')]
 
 
