@@ -99,7 +99,7 @@ def _run_cli(config_url: Path, *argv):
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     proc = subprocess.run(
         [sys.executable, "-m", "codex_model_manager", "--config", str(config_url), *argv],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, encoding="utf-8", env=env,
         cwd=str(Path(__file__).resolve().parent.parent))
     return proc.returncode, proc.stdout, proc.stderr
 
