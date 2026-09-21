@@ -22,6 +22,16 @@
 > 改为**证据门控**——证据有效才允许写入。证据探测与真实写入均在隔离的临时 `CODEX_HOME` 内完成，
 > 不修改用户真实 `config.toml`/`auth.json`，不安装新 Codex，不发模型请求。详见"验证情况"与 [HANDOFF.md](HANDOFF.md) 第 16 节。
 
+## 界面预览
+
+连接与桥控制：
+
+![连接与兼容界面](docs/screenshots/connection-bridge.png)
+
+模型目录接管与编辑：
+
+![模型管理界面](docs/screenshots/model-management.png)
+
 ## 技术栈
 
 - Python 3.11+（开发/验证环境为 3.12）
