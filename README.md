@@ -108,6 +108,10 @@ Codex 内置模型 ─┐
 
 构建、测试、开发安装和发行流程见[开发与发行](docs/development.md)。
 
+## Windows 版本
+
+独立的 Python/tkinter 实现位于 [windows](./windows/README.md)，支持 Windows 原生 Codex 与 WSL 后端。它保留独立的测试和构建入口；macOS 应用继续使用本仓 Swift 实现。Windows 版目前手动同步，协议桥默认关闭，正式便携包与真实环境验收见 Windows 文档。
+
 ## 许可证
 
 本项目采用 [Apache License 2.0](./LICENSE)。

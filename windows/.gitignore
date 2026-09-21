@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local application state and generated demo output
+demo/demo_home/
+demo/persist/
+demo/codex/
+*.log
+*.bak
+
+# Local bridge captures and observation output
+obs-*.jsonl
+obs-*.log
+capture/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Portable GUI build and private preferences
+build/
+dist/
+*.spec
+user-data/
