@@ -83,6 +83,70 @@ final class CatalogSyncServiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: custom), savedSource)
     }
 
+    func testOfficialCatalogPrefersAccountBackedRefreshAndFallsBackToBundled() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let home = directory.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".codex", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let runtime = directory.appendingPathComponent("codex")
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo 'codex-test 1.0'
+          exit 0
+        fi
+        if [ -e "$CODEX_HOME/config.toml" ]; then
+          echo "refresh inherited user configuration" >&2
+          exit 21
+        fi
+        case " $* " in
+          *" --bundled "*)
+            echo '{"models":[{"slug":"gpt-bundled","priority":1,"context_window":1000,"max_context_window":1000,"input_modalities":["text"]}]}'
+            ;;
+          *)
+            if [ ! -e "$CODEX_HOME/auth.json" ]; then
+              echo "no credentials" >&2
+              exit 22
+            fi
+            echo '{"models":[{"slug":"gpt-bundled","priority":1,"context_window":1000,"max_context_window":1000,"input_modalities":["text"]},{"slug":"gpt-new-sol","priority":2,"context_window":2000,"max_context_window":2000,"input_modalities":["text"]}]}'
+            ;;
+        esac
+        """
+        try Data(script.utf8).write(to: runtime)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: runtime.path)
+        try Data(#"{"token":"test"}"#.utf8).write(
+            to: home.appendingPathComponent(".codex/auth.json")
+        )
+
+        let custom = directory.appendingPathComponent("custom.json")
+        try Data(#"{"models":[],"schema":"x"}"#.utf8).write(to: custom)
+
+        let paths = makePaths(directory: directory, runtime: runtime, custom: custom)
+        let refreshed = try CatalogSyncService(paths: paths, homeDirectory: home).sync()
+        let refreshedRecord = try JSONSerialization.jsonObject(with: refreshed.recordData) as! [String: Any]
+        XCTAssertEqual(refreshedRecord["official_source"] as? String, "refresh")
+        var slugs = try readSlugs(paths)
+        XCTAssertEqual(slugs, ["gpt-bundled", "gpt-new-sol"])
+
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".codex/auth.json"))
+        let bundled = try CatalogSyncService(paths: paths, homeDirectory: home).sync()
+        let bundledRecord = try JSONSerialization.jsonObject(with: bundled.recordData) as! [String: Any]
+        XCTAssertEqual(bundledRecord["official_source"] as? String, "bundled")
+        slugs = try readSlugs(paths)
+        XCTAssertEqual(slugs, ["gpt-bundled"])
+    }
+
+    private func readSlugs(_ paths: CatalogPaths) throws -> [String] {
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: paths.mergedCatalog)) as! [String: Any]
+        return (root["models"] as! [[String: Any]]).compactMap { $0["slug"] as? String }
+    }
+
     func testCodexConfigUpdatePreservesOtherTopLevelAndProfileValues() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

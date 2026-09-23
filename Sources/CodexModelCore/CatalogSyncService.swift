@@ -8,9 +8,14 @@ public struct CatalogSyncResult: Sendable {
 
 public struct CatalogSyncService: Sendable {
     public let paths: CatalogPaths
+    public let homeDirectory: URL
 
-    public init(paths: CatalogPaths) {
+    public init(
+        paths: CatalogPaths,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) {
         self.paths = paths
+        self.homeDirectory = homeDirectory
     }
 
     public func ensureInitialFiles() throws {
@@ -45,28 +50,14 @@ public struct CatalogSyncService: Sendable {
         }
         try ensureInitialFiles()
 
-        let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "codex-model-manager-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(at: isolatedCodexHome, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: isolatedCodexHome) }
-
-        let bundledResult = try ProcessRunner.run(
-            paths.codexRuntime,
-            arguments: ["debug", "models", "--bundled"],
-            environment: ["CODEX_HOME": isolatedCodexHome.path]
-        )
-        guard bundledResult.exitCode == 0 else {
-            throw CoreError.processFailed(Self.processMessage("读取 Codex 官方模型失败", bundledResult))
-        }
+        let officialCatalog = try readOfficialCatalog()
         let versionResult = try ProcessRunner.run(paths.codexRuntime, arguments: ["--version"])
         guard versionResult.exitCode == 0 else {
             throw CoreError.processFailed(Self.processMessage("读取 Codex 版本失败", versionResult))
         }
 
         let customData = try Data(contentsOf: paths.customSource)
-        let bundledData = Data(bundledResult.standardOutput.utf8)
+        let bundledData = Data(officialCatalog.output.utf8)
         let customRoot = try Self.rootObject(customData, name: "自定义模型源")
         var bundledRoot = try Self.rootObject(bundledData, name: "Codex 官方模型")
         guard
@@ -158,6 +149,7 @@ public struct CatalogSyncService: Sendable {
             "custom_models": paths.customSource.path,
             "custom_hash": customHash,
             "catalog": paths.mergedCatalog.path,
+            "official_source": officialCatalog.source,
             "bundled_count": bundledModels.count,
             "custom_count": prioritizedCustom.count,
             "applied_model_overrides": appliedOverrides,
@@ -176,6 +168,73 @@ public struct CatalogSyncService: Sendable {
         let handle = try FileHandle(forWritingTo: paths.errorLog)
         defer { try? handle.close() }
         try handle.truncate(atOffset: 0)
+    }
+
+    private struct OfficialCatalog {
+        let output: String
+        let source: String
+    }
+
+    /// The online catalog is account-backed, so newly released models appear before the bundled
+    /// list ships them. It runs in an isolated `CODEX_HOME` that carries only credentials: a real
+    /// home would resolve `model_catalog_json` to our own merged catalog and echo custom models
+    /// back as official ones. If refresh is unavailable, fall back to the bundled list.
+    private func readOfficialCatalog() throws -> OfficialCatalog {
+        if let refreshed = try? readRefreshedOfficialCatalog(), !refreshed.output.isEmpty {
+            return refreshed
+        }
+        return try readBundledOfficialCatalog()
+    }
+
+    private func readRefreshedOfficialCatalog() throws -> OfficialCatalog? {
+        let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "codex-model-manager-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: isolatedCodexHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: isolatedCodexHome) }
+
+        let authSource = Self.codexAuthFile(homeDirectory: homeDirectory)
+        if FileManager.default.fileExists(atPath: authSource.path) {
+            try FileManager.default.copyItem(
+                at: authSource,
+                to: isolatedCodexHome.appendingPathComponent("auth.json")
+            )
+        }
+        let result = try ProcessRunner.run(
+            paths.codexRuntime,
+            arguments: ["debug", "models"],
+            environment: ["CODEX_HOME": isolatedCodexHome.path]
+        )
+        guard result.exitCode == 0, !result.standardOutput.isEmpty else { return nil }
+        return OfficialCatalog(output: result.standardOutput, source: "refresh")
+    }
+
+    private func readBundledOfficialCatalog() throws -> OfficialCatalog {
+        let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "codex-model-manager-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: isolatedCodexHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: isolatedCodexHome) }
+
+        let bundledResult = try ProcessRunner.run(
+            paths.codexRuntime,
+            arguments: ["debug", "models", "--bundled"],
+            environment: ["CODEX_HOME": isolatedCodexHome.path]
+        )
+        guard bundledResult.exitCode == 0 else {
+            throw CoreError.processFailed(Self.processMessage("读取 Codex 官方模型失败", bundledResult))
+        }
+        return OfficialCatalog(output: bundledResult.standardOutput, source: "bundled")
+    }
+
+    private static func codexAuthFile(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("auth.json")
     }
 
     public func syncAndAppendLog() throws -> CatalogSyncResult {
