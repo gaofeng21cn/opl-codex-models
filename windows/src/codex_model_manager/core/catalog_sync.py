@@ -5,9 +5,8 @@ Faithful port of Sources/CodexModelCore/CatalogSyncService.swift.
 Flow:
   1. validate overrides
   2. ensure runtime is executable, ensure initial files
-  3. create an isolated temp CODEX_HOME so the bundled catalog is read without
-     inheriting the user's real config (mirrors the Swift implementation)
-  4. `codex debug models --bundled` -> official catalog
+  3. create an isolated temp CODEX_HOME with the selected runtime's credentials
+  4. refresh the official catalog, falling back to the bundled catalog
   5. `codex --version`
   6. merge official + custom (custom always appended with higher priority,
      never guessed), applying visibility overrides and field overrides
@@ -20,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .errors import InvalidCatalog, ProcessFailed
+from .errors import CodexModelError, InvalidCatalog, ProcessFailed
 from .overrides import ModelFieldOverrides
 from .backup import atomic_write, backup_file
 
@@ -172,18 +172,32 @@ class CatalogSyncService:
         with tempfile.TemporaryDirectory(
             prefix="codex-model-manager-", dir=_temp_parent()
         ) as isolated:
-            bundled = target.run(["debug", "models", "--bundled"],
-                                 timeout=120.0, codex_home_win=isolated)
-            if bundled.exit_code != 0:
-                detail = bundled.standard_error.strip()
-                message = detail or f"读取 Codex 官方模型失败，退出码 {bundled.exit_code}。"
+            source = "bundled"
+            try:
+                auth_source = self._auth_source(target)
+                has_auth = bool(auth_source and auth_source.is_file())
+                if has_auth:
+                    shutil.copyfile(auth_source, Path(isolated) / "auth.json")
+                refreshed = target.run(["debug", "models"], timeout=120.0,
+                                       codex_home_win=isolated)
+            except (OSError, CodexModelError):
+                refreshed = None
+            official = refreshed if refreshed and refreshed.exit_code == 0 and refreshed.standard_output.strip() else None
+            if official is not None:
+                source = "refresh"
+            else:
+                official = target.run(["debug", "models", "--bundled"],
+                                      timeout=120.0, codex_home_win=isolated)
+            if official.exit_code != 0:
+                detail = official.standard_error.strip()
+                message = detail or f"读取 Codex 官方模型失败，退出码 {official.exit_code}。"
                 raise ProcessFailed(message)
 
             version = target.run(["--version"], timeout=30.0, codex_home_win=isolated)
             app_version = version.standard_output.strip() if version.exit_code == 0 else "unknown"
 
             custom_bytes = Path(self.paths.custom_source).read_bytes()
-            bundled_bytes = bundled.standard_output.encode("utf-8")
+            bundled_bytes = official.standard_output.encode("utf-8")
 
             custom_root = parse_root(custom_bytes, "自定义模型源")
             bundled_root = parse_root(bundled_bytes, "Codex 官方模型")
@@ -277,6 +291,7 @@ class CatalogSyncService:
                 "custom_models": self.paths.custom_source,
                 "custom_hash": custom_hash,
                 "catalog": self.paths.merged_catalog,
+                "official_source": source,
                 "bundled_count": len(merged_official),
                 "custom_count": len(merged_custom),
                 "applied_model_overrides": applied_overrides,
@@ -288,6 +303,27 @@ class CatalogSyncService:
             record = {k: v for k, v in record.items() if v is not None}
             record_data = json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8")
             return CatalogSyncResult(status=status, record_data=record_data)
+
+    def _auth_source(self, target) -> Optional[Path]:
+        """Use the selected runtime's identity without importing its config.toml."""
+        if not target.is_wsl:
+            return Path(self.paths.codex_home_win or Path.home() / ".codex") / "auth.json"
+        from .wsl_adapter import filtered_windows_env, run_process, to_windows_path, wsl_exe
+
+        exe = wsl_exe()
+        if not exe or not target.distro:
+            return None
+        result = run_process(
+            exe, ["--distribution", target.distro, "--exec", "printenv", "HOME"],
+            timeout=20.0, environment=filtered_windows_env(), replace_env=True,
+        )
+        if result.exit_code != 0:
+            return None
+        linux_home = result.standard_output.strip()
+        if not linux_home.startswith("/"):
+            return None
+        win_path = to_windows_path(linux_home.rstrip("/") + "/.codex/auth.json", target.distro)
+        return Path(win_path) if win_path else None
 
     def clear_error_log(self) -> None:
         self.ensure_initial_files()

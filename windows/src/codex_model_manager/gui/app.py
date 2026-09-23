@@ -27,6 +27,7 @@ from ..core.errors import (
     InvalidConfiguration,
     RuntimeNotFound,
 )
+from ..core.overrides import ModelFieldOverrides
 from ..core.reasoning import ReasoningSettings
 from ..core.safe_preview import parse_error_note, preview, render_preview, same_as_current
 from ..services.catalog_data_service import CatalogDataService, CatalogSnapshot
@@ -121,6 +122,60 @@ class ReasoningDialog(tk.Toplevel):
             return
         self.on_save(settings)
         self.destroy()
+
+
+class ContextOverrideDialog(tk.Toplevel):
+    """Keep only checked context fields when the next official catalog arrives."""
+
+    def __init__(self, master, model, current: ModelFieldOverrides, on_save):
+        super().__init__(master)
+        self.title(f"编辑上下文覆盖 - {model.slug}")
+        self.resizable(False, False)
+        self.grab_set()
+        self.configure(padx=16, pady=12)
+        self.on_save = on_save
+        ttk.Label(self, text="只覆盖勾选字段，其他官方配置继续更新。", style="Muted.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        self.fields = []
+        for row, (label, value, fallback) in enumerate((
+            ("当前上下文", current.context_window, model.context_window),
+            ("最大上下文", current.max_context_window, model.max_context_window),
+        ), start=1):
+            enabled = tk.BooleanVar(value=value is not None)
+            entry_value = tk.StringVar(value=str(value if value is not None else fallback or ""))
+            ttk.Checkbutton(self, text=f"覆盖{label}", variable=enabled).grid(
+                row=row, column=0, sticky="w", padx=4, pady=4)
+            ttk.Entry(self, textvariable=entry_value, justify="right", width=18).grid(
+                row=row, column=1, sticky="e", padx=4, pady=4)
+            self.fields.append((enabled, entry_value))
+        ttk.Label(self, text="单位：token；384K = 393216。", style="Muted.TLabel").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(6, 10))
+        ttk.Button(self, text="全部跟随官方", command=self._clear).grid(row=4, column=0, sticky="w")
+        ttk.Button(self, text="保存并同步", command=self._save).grid(row=4, column=1, sticky="e")
+
+    def _clear(self):
+        for enabled, _ in self.fields:
+            enabled.set(False)
+
+    def _save(self):
+        values = []
+        for enabled, entry in self.fields:
+            if not enabled.get():
+                values.append(None)
+                continue
+            try:
+                values.append(int(entry.get().strip()))
+            except ValueError:
+                messagebox.showerror("无效数值", "上下文必须是正整数。", parent=self)
+                return
+        override = ModelFieldOverrides(*values)
+        try:
+            override.validate()
+        except InvalidConfiguration as exc:
+            messagebox.showerror("无效配置", str(exc), parent=self)
+            return
+        if self.on_save(override):
+            self.destroy()
 
 
 class AddModelDialog(tk.Toplevel):
@@ -688,6 +743,11 @@ class CodexModelManagerApp:
             f"推理档位: {', '.join(m.reasoning.supported_efforts)}\n"
             f"默认档位: {m.reasoning.default_effort}\n"
         )
+        if source == "官方" and self._config is not None:
+            override = self._config.model_overrides.get(m.slug)
+            if override and not override.is_empty:
+                text += "本机覆盖: " + ", ".join(
+                    f"{name}={value}" for name, value in override.fields.items()) + "\n"
         self.detail.configure(state="normal")
         self.detail.delete("1.0", tk.END)
         self.detail.insert("1.0", text)
@@ -825,7 +885,9 @@ class CodexModelManagerApp:
             EditModelDialog(self.root, m, lambda edit: self._on_edit_pending(m.slug, edit))
             return
         if m.source != "custom":
-            messagebox.showinfo("提示", "官方模型的推理档位随目录同步，详情中只读。")
+            current = self._config.model_overrides.get(m.slug, ModelFieldOverrides())
+            ContextOverrideDialog(self.root, m, current,
+                                  lambda override: self._on_context_override(m.slug, override))
             return
         ReasoningDialog(self.root, m.slug, m.reasoning, lambda s: self._on_reasoning(m.slug, s))
 
@@ -850,6 +912,25 @@ class CodexModelManagerApp:
             self.status.set(f"已更新 {slug} 推理档位")
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("更新失败", str(exc))
+
+    def _on_context_override(self, slug, override):
+        if self._syncing or self._config is None:
+            messagebox.showwarning("请稍候", "同步完成后再修改上下文。", parent=self.root)
+            return False
+        try:
+            config = copy.deepcopy(self._config)
+            if override.is_empty:
+                config.model_overrides.pop(slug, None)
+            else:
+                config.model_overrides[slug] = override
+            backup_file(self.config_url, config.resolved_paths().backup_directory, prefix="config")
+            config.save(self.config_url)
+            self._config = config
+            self.sync()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return False
 
     def backup(self):
         if self.catalog_view.get() == 'Codex 配置引用（只读）':

@@ -113,7 +113,7 @@ Codex 官方模型 ─┐
 
 ## Windows 版本
 
-独立的 Python/tkinter 实现位于 [windows](./windows/README.md)，支持 Windows 原生 Codex 与 WSL 后端。它保留独立的测试和构建入口；macOS 应用继续使用本仓 Swift 实现。Windows 版目前手动同步，协议桥默认关闭，正式便携包与真实环境验收见 Windows 文档。
+独立的 Python/tkinter 实现位于 [windows](./windows/README.md)，支持 Windows 原生 Codex 与 WSL 后端。Windows 便携预览包与 macOS 正式版共用 [v0.4.2 下载页面](https://github.com/gaofeng21cn/opl-codex-models/releases/tag/v0.4.2)，请按文件名选择对应系统。Windows 版目前手动同步，协议桥默认关闭，安装与使用说明见 Windows 文档。
 
 ## 许可证
 

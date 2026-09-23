@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ def _m(paths, overrides=None, visibility=None):
         backup_directory=paths["backup_directory"],
         visibility_overrides=visibility or paths["visibility_overrides"],
         model_overrides=overrides if overrides is not None else paths["model_overrides"],
+        codex_home_win=paths.get("codex_home_win"),
     )
 
 
@@ -61,6 +63,57 @@ CUSTOM = {
         }
     ]
 }
+
+
+def test_account_refresh_and_bundled_fallback(mock_runtime, tmp_path, monkeypatch):
+    paths, _ = mock_runtime(bundled=BUNDLED, custom_models=CUSTOM)
+    codex_home = tmp_path / "real-codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text('{"token":"test"}', encoding="utf-8")
+    (codex_home / "config.toml").write_text('model_catalog_json = "wrong.json"', encoding="utf-8")
+    paths["codex_home_win"] = str(codex_home)
+    refreshed = tmp_path / "online.json"
+    refreshed.write_text(json.dumps({"models": [
+        BUNDLED["models"][0],
+        {"slug": "gpt-6-sol", "priority": 2, "context_window": 272000,
+         "max_context_window": 872000, "input_modalities": ["text", "image"]},
+    ]}), encoding="utf-8")
+    monkeypatch.setenv("MOCK_REFRESH_JSON", str(refreshed))
+    service = CatalogSyncService(_m(paths))
+
+    online = json.loads(service.sync().record_data)
+    assert online["official_source"] == "refresh"
+    assert [m["slug"] for m in _read(paths["merged_catalog"])["models"]] == [
+        "gpt-official", "gpt-6-sol", "vendor-model"]
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == 'model_catalog_json = "wrong.json"'
+
+    (codex_home / "auth.json").unlink()
+    offline = json.loads(service.sync().record_data)
+    assert offline["official_source"] == "bundled"
+    assert [m["slug"] for m in _read(paths["merged_catalog"])["models"]] == [
+        "gpt-official", "vendor-model"]
+
+
+def test_wsl_auth_source_uses_selected_distribution(mock_runtime, monkeypatch):
+    from codex_model_manager.core import wsl_adapter
+    from codex_model_manager.core.process_runner import ProcessResult
+
+    paths, _ = mock_runtime(bundled=BUNDLED, custom_models=CUSTOM)
+    calls = []
+    monkeypatch.setattr(wsl_adapter, "wsl_exe", lambda: r"C:\Windows\System32\wsl.exe")
+
+    def run(executable, arguments, **kwargs):
+        calls.append((executable, arguments))
+        return ProcessResult(exit_code=0, standard_output="/home/someone\n", standard_error="")
+
+    monkeypatch.setattr(wsl_adapter, "run_process", run)
+    monkeypatch.setattr(wsl_adapter, "to_windows_path", lambda path, distro: (
+        calls.append((distro, path)) or r"\\wsl.localhost\Ubuntu\home\someone\.codex\auth.json"))
+    target = SimpleNamespace(is_wsl=True, distro="Ubuntu")
+    source = CatalogSyncService(_m(paths))._auth_source(target)
+    assert str(source).endswith("auth.json")
+    assert calls[0][1] == ["--distribution", "Ubuntu", "--exec", "printenv", "HOME"]
+    assert calls[1] == ("Ubuntu", "/home/someone/.codex/auth.json")
 
 
 def test_merge_matches_original_semantics(mock_runtime):

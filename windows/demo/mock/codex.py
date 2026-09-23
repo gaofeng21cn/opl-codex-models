@@ -18,6 +18,7 @@ Settings via environment:
                           (default: ./bundled_models.json next to this file)
   MOCK_EXIT_CODE      -> if set to a non-zero int, exit(1) for bundled call
   MOCK_SLEEP_SECONDS  -> if set, sleep before answering (to test timeouts)
+  MOCK_REFRESH_JSON   -> optional account-backed catalog when isolated auth.json exists
 
 Exit codes follow the real CLI convention: 0 on success, non-zero on error.
 """
@@ -88,6 +89,15 @@ def main(argv):
             if not bundled_file:
                 bundled_file = os.path.join(HERE, "bundled_models.json")
             with open(bundled_file, "r", encoding="utf-8") as fh:
+                sys.stdout.write(fh.read())
+            return 0
+        refreshed = os.environ.get("MOCK_REFRESH_JSON")
+        home = os.environ.get("CODEX_HOME", "")
+        if refreshed and os.path.isfile(os.path.join(home, "auth.json")):
+            if os.path.isfile(os.path.join(home, "config.toml")):
+                print("isolated refresh inherited config.toml", file=sys.stderr)
+                return 1
+            with open(refreshed, "r", encoding="utf-8") as fh:
                 sys.stdout.write(fh.read())
             return 0
         return _read_catalog_from_config()

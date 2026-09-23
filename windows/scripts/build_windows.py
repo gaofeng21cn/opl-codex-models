@@ -1,6 +1,7 @@
 """Build portable Windows GUI and WSL worker sources. No user state."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,8 +27,19 @@ def main():
     for name in ('QUICKSTART.md', 'README.md', 'LICENSE', 'SOURCE_NOTICE.md',
                  'THIRD_PARTY_NOTICES.txt', 'SUN_VALLEY_LICENSE.txt'):
         shutil.copy2(ROOT/name, bundle/name)
+    release_tag = os.environ.get('CODEX_MODELS_RELEASE_TAG', '')
+    if release_tag and not re.fullmatch(r'v\d+\.\d+\.\d+', release_tag):
+        raise SystemExit('CODEX_MODELS_RELEASE_TAG must be vX.Y.Z')
+    if release_tag:
+        (bundle/'VERSION.txt').write_text(
+            f'Codex Models {release_tag} - Windows preview\n'
+            f'Source commit: {os.environ.get("GITHUB_SHA", "unknown")}\n',
+            encoding='utf-8',
+        )
     for p in bundle.rglob('__pycache__'): shutil.rmtree(p)
-    archive = shutil.make_archive(str(ROOT/'dist/CodexModelManager-Windows-portable'), 'zip', ROOT/'dist', 'CodexModelManager')
+    archive_name = (f'Codex-Models-Windows-{release_tag}-preview' if release_tag
+                    else 'CodexModelManager-Windows-portable')
+    archive = shutil.make_archive(str(ROOT/'dist'/archive_name), 'zip', ROOT/'dist', 'CodexModelManager')
     print(archive)
 
 

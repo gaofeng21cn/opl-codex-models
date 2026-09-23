@@ -25,4 +25,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\offline_demo.ps1
 - 真实 DeepSeek 中转和桌面 GUI 验收证据属于当前环境记录；换机器、运行时或中转后应重新验证。
 - 发布版不包含已退役的 `deepseek-delegation` MCP；DeepSeek 任务委派由独立的 `dsh` 集成负责。
 
-当前版本：`0.1.0` release candidate。
+当前对外版本与 macOS 共用 `v0.4.2`，Windows 资产标注为未签名预览版。正式发布以同一 Release 页的 Windows ZIP 与校验和可下载为准；Windows 工作流只构建与验收，不会阻断 macOS 主发布。
