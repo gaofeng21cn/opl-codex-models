@@ -46,6 +46,73 @@ def _appdata_dir() -> Path:
     return Path(os.path.expanduser("~")) / "AppData" / "Local"
 
 
+def connection_prefs_path(config_url: str) -> str:
+    """The connection page's preferences file, beside the app config.
+
+    The connection page has always stored its selected ``config.toml`` here. The
+    model page must use the same source of truth, otherwise a path that is correct
+    on the connection page leaves ``codexConfigPath`` empty and every catalog-based
+    feature (including takeover state) reports "unavailable".
+    """
+    return str(Path(config_url).with_name("connection.json"))
+
+
+def load_connection_prefs(config_url: str) -> dict:
+    """Read the connection page prefs; a missing/corrupt file is an empty dict."""
+    path = Path(connection_prefs_path(config_url))
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_connection_prefs(config_url: str, data: dict) -> None:
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    atomic_write(connection_prefs_path(config_url), payload)
+
+
+def sync_connection_config(config: "AppConfiguration", config_url: str, *,
+                           save: bool = True) -> bool:
+    """Keep the connection page's selected config and the app config in lock-step.
+
+    Adopts the connection page's ``config`` into ``codexConfigPath`` (and the
+    backend/distro selection) when it differs, so the model page and every
+    catalog-based feature use exactly what the connection page shows. If the
+    connection file does not exist yet but the app config already names a config,
+    the selection is written back so the reverse direction cannot drift either.
+
+    Returns True when the app config changed (and was saved, when ``save``).
+    """
+    prefs = load_connection_prefs(config_url)
+    conn = str(prefs.get("config") or "").strip()
+    changed = False
+    if conn:
+        if (config.codex_config_path or "").strip() != conn:
+            config.codex_config_path = conn
+            changed = True
+        backend = prefs.get("backend")
+        if backend in ("auto", "native", "wsl") and (config.codex_backend or "auto") != backend:
+            config.codex_backend = backend
+            changed = True
+        distro = str(prefs.get("distro") or "").strip()
+        if distro and (config.codex_distro or "") != distro:
+            config.codex_distro = distro
+            changed = True
+    elif (config.codex_config_path or "").strip():
+        data = dict(prefs)
+        data["config"] = config.codex_config_path
+        data.setdefault("backend", config.codex_backend or "auto")
+        if config.codex_distro:
+            data.setdefault("distro", config.codex_distro)
+        save_connection_prefs(config_url, data)
+    if changed and save:
+        config.save(config_url)
+    return changed
+
+
 @dataclass
 class AppConfiguration:
     codex_runtime_path: Optional[str] = None
@@ -89,6 +156,10 @@ class AppConfiguration:
     takeover_import: Optional[Dict] = None
     # Undo record of the last takeover write-back (active path, backup, hashes).
     last_takeover: Optional[Dict] = None
+    # Undo record of the last "first apply" (publish the edit copy as a catalog the
+    # selected config.toml then references). Holds both file paths, both backups and
+    # the hashes needed to refuse an undo after an external change.
+    last_first_apply: Optional[Dict] = None
     # Optional local Responses compatibility bridge. Disabled by default; the
     # bridge forwards Codex's bearer header and never stores credentials.
     bridge_enabled: bool = False
@@ -148,6 +219,7 @@ class AppConfiguration:
             "takeoverCatalogPath": self.takeover_catalog_path,
             "takeoverImport": self.takeover_import or None,
             "lastTakeover": self.last_takeover or None,
+            "lastFirstApply": self.last_first_apply or None,
             "bridgeEnabled": self.bridge_enabled,
             "bridgeHost": self.bridge_host,
             "bridgePort": self.bridge_port,
@@ -185,6 +257,7 @@ class AppConfiguration:
             takeover_catalog_path=takeover_catalog_path,
             takeover_import=data.get("takeoverImport"),
             last_takeover=data.get("lastTakeover"),
+            last_first_apply=data.get("lastFirstApply"),
             bridge_enabled=bool(data.get("bridgeEnabled", False)),
             bridge_host=data.get("bridgeHost", "127.0.0.1") or "127.0.0.1",
             bridge_port=int(data.get("bridgePort", 8787) or 8787),

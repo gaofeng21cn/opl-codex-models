@@ -18,6 +18,7 @@ def main():
                '--paths', str(ROOT/'src'), '--collect-submodules', 'codex_model_manager', '--collect-all', 'sv_ttk',
                '--add-data', str(ROOT/'src/codex_model_manager') + ';bridge-runtime/src/codex_model_manager',
                '--add-data', str(ROOT/'scripts/bridge_worker.py') + ';bridge-runtime/scripts',
+               '--add-data', str(ROOT/'scripts/gui_model_management_smoke.py') + ';bridge-runtime/scripts',
                str(ROOT/'scripts/desktop_entry.py')]
     # Both entry points share the same dependencies, but only the worker needs pipes.
     subprocess.run(command + ['--console', '--name', 'CodexModelManagerWorker'], cwd=ROOT, check=True)

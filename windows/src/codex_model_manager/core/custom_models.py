@@ -161,6 +161,59 @@ def add_from_template(
     return _dumps(root)
 
 
+def add_blank_model(
+    draft: NewModelDraft,
+    source_data: bytes,
+    existing_slugs: Optional[set] = None,
+) -> bytes:
+    """Add a minimal model without copying any template.
+
+    Used when the catalog has no model to copy from (first model in an empty
+    catalog). Only the fields the user supplied are written - nothing is invented -
+    so the user can complete it afterwards with the normal editor.
+    """
+    slug = draft.normalized_slug
+    if not is_valid_slug(slug):
+        raise InvalidConfiguration(f"模型标识无效：{draft.slug}")
+    if existing_slugs is not None and slug in existing_slugs:
+        raise InvalidConfiguration(f"模型标识已存在：{slug}")
+    display_name = draft.normalized_display_name
+    description = draft.normalized_description
+    if draft.context_window <= 0 or not display_name or not description:
+        raise InvalidConfiguration("请填写标识、名称、描述和上下文大小。")
+
+    root = _loads(source_data)
+    models = root.get("models")
+    if not isinstance(models, list):
+        raise InvalidConfiguration("custom-models 的 models 必须是数组")
+
+    priorities = [
+        m.get("priority") for m in models
+        if isinstance(m, dict) and isinstance(m.get("priority"), int)
+    ]
+    model: Dict = {
+        "slug": slug,
+        "visibility": "list",
+        "display_name": display_name,
+        "description": description,
+        "context_window": draft.context_window,
+        "max_context_window": draft.context_window,
+        "input_modalities": ["text", "image"] if draft.supports_image else ["text"],
+        "supports_image_detail_original": bool(
+            draft.supports_image and draft.supports_original_image_detail),
+        "priority": (max(priorities) + 1 if priorities else 1000),
+    }
+    if draft.reasoning is not None and draft.reasoning.is_valid:
+        _apply_reasoning(draft.reasoning, model)
+
+    new_models = list(models) + [model]
+    root["models"] = new_models
+    from .safe_preview import validate_models
+
+    validate_models(new_models, require_priority=False, allow_empty=True, name="模型源")
+    return _dumps(root)
+
+
 class ModelEdit:
     """An explicit, per-field edit of one existing catalog model.
 
@@ -168,6 +221,10 @@ class ModelEdit:
     every other model, and every unknown top-level key) is carried over verbatim.
     ``None`` therefore means "leave as-is", not "clear" - which is what makes an
     edit of a model the user did not author safe to apply.
+
+    ``new_slug`` is a first-class rename: the model keeps its position and every
+    other field, only the ``slug`` value changes. Duplicate ids are refused so a
+    rename can never create two entries with the same id.
     """
 
     def __init__(
@@ -177,12 +234,14 @@ class ModelEdit:
         display_name: Optional[str] = None,
         description: Optional[str] = None,
         reasoning: Optional[ReasoningSettings] = None,
+        new_slug: Optional[str] = None,
     ):
         self.context_window = context_window
         self.max_context_window = max_context_window
         self.display_name = display_name
         self.description = description
         self.reasoning = reasoning
+        self.new_slug = new_slug
 
     @property
     def is_empty(self) -> bool:
@@ -192,6 +251,7 @@ class ModelEdit:
             and self.display_name is None
             and self.description is None
             and self.reasoning is None
+            and self.new_slug is None
         )
 
 
@@ -230,6 +290,19 @@ def update_model(
         raise InvalidConfiguration(f"{name}中找不到模型：{slug}")
 
     model = dict(models[index])
+    if edit.new_slug is not None:
+        new_slug = normalize_slug(edit.new_slug)
+        if not is_valid_slug(new_slug):
+            raise InvalidConfiguration(f"模型标识无效：{edit.new_slug}")
+        if new_slug != model.get("slug"):
+            duplicate = next(
+                (m for i, m in enumerate(models)
+                 if i != index and isinstance(m, dict) and m.get("slug") == new_slug),
+                None,
+            )
+            if duplicate is not None:
+                raise InvalidConfiguration(f"模型标识已存在：{new_slug}")
+            model["slug"] = new_slug
     if edit.display_name is not None:
         display_name = " ".join(edit.display_name.split())
         if not display_name:
@@ -270,3 +343,49 @@ def update_model(
 def update_reasoning(settings: ReasoningSettings, slug: str, source_data: bytes) -> bytes:
     """Edit only the reasoning levels/default of an existing model."""
     return update_model(ModelEdit(reasoning=settings), slug, source_data)
+
+
+def remove_model(slug: str, source_data: bytes, name: str = "模型源") -> bytes:
+    """Remove one model by slug, preserving every other model and top-level key.
+
+    Deletion is only ever the result of an explicit user action; callers still
+    confirm it (and a write-back still needs ``confirm_removals=True``) so a model
+    can never disappear silently.
+    """
+    root = _loads(source_data)
+    models = root.get("models")
+    if not isinstance(models, list):
+        raise InvalidCatalog(f"{name} models 必须是数组")
+    remaining = [m for m in models
+                 if not (isinstance(m, dict) and m.get("slug") == slug)]
+    if len(remaining) == len(models):
+        raise InvalidConfiguration(f"{name}中找不到模型：{slug}")
+    root["models"] = remaining
+    return _dumps(root)
+
+
+def describe_edit(edit: "ModelEdit", slug: str) -> list:
+    """Human-readable list of the exact field changes a ModelEdit will make.
+
+    Used by the GUI preview so the user sees, before anything is written, that a
+    rename is shown as ``ID: old -> new`` and every other changed field is named.
+    Unknown fields are never listed here (they are untouched); the raw diff at
+    write-back time is still the authoritative record.
+    """
+    lines = []
+    if edit.new_slug is not None:
+        new_slug = normalize_slug(edit.new_slug)
+        if new_slug != slug:
+            lines.append(f"ID: {slug} -> {new_slug}")
+    if edit.display_name is not None:
+        lines.append(f"显示名: {edit.display_name}")
+    if edit.description is not None:
+        lines.append(f"描述: {edit.description}")
+    if edit.context_window is not None:
+        lines.append(f"当前上下文: {edit.context_window}")
+    if edit.max_context_window is not None:
+        lines.append(f"最大上下文: {edit.max_context_window}")
+    if edit.reasoning is not None:
+        lines.append("推理档位: " + ", ".join(edit.reasoning.supported_efforts)
+                     + f"（默认 {edit.reasoning.default_effort}）")
+    return lines

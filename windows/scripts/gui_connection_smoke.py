@@ -25,12 +25,13 @@ def main():
     errors = []
     with tempfile.TemporaryDirectory(prefix='manager-gui-smoke-') as td:
         home = Path(td); target = home/'codex.toml'
-        before = b'# sentinel\nmodel_provider="Test"\n[model_providers.Test]\nbase_url="https://relay.invalid/"\n'
-        target.write_bytes(before)
         merged = home/'models.json'; custom = home/'custom-models.json'
         model = {'slug':'gpt-6-astra','display_name':'GPT','description':'test','priority':1,
                  'visibility':'list','context_window':128000,'max_context_window':128000,'input_modalities':['text']}
         merged.write_text(json.dumps({'models':[model]})); custom.write_text('{"models":[]}')
+        before = (f'# sentinel\nmodel_provider="Test"\nmodel_catalog_json="{merged.as_posix()}"\n'
+                  '[model_providers.Test]\nbase_url="https://relay.invalid/"\n').encode()
+        target.write_bytes(before)
         cfg = AppConfiguration(custom_source_path=str(custom), merged_catalog_path=str(merged),
             sync_log_path=str(home/'sync.jsonl'), error_log_path=str(home/'error.log'),
             backup_directory_path=str(home/'backups'), codex_config_path=str(target))
@@ -78,11 +79,11 @@ def main():
             assert panel.details.winfo_ismapped()
             panel.details_button.invoke(); root.update()
             assert not panel.details.winfo_ismapped()
-            app.catalog_view.set('管理器编辑目录'); app.refresh()
-            # Model tab still renders and filters independently.
-            app.notebook.select(app.models_page); app.search_var.set('gpt-6'); root.update()
-            assert app.listbox.size() == 1
-            app.listbox.selection_set(0); app.show_detail(); assert 'gpt-6-astra' in app.detail.get('1.0','end')
+            # Model tab still renders and filters its live catalog independently.
+            app.notebook.select(app.model_page); app.model_page.search_var.set('gpt-6'); root.update()
+            assert len(app.model_page._rows) == 1, [r['model'].slug for r in app.model_page._rows]
+            app.model_page.tree.selection_set('0'); app.model_page._show_detail()
+            assert 'gpt-6-astra' in app.model_page.detail.get('1.0','end')
             app.notebook.select(panel); panel.restore_button.invoke()
             wait(lambda: not panel.busy and not panel.snapshot['configured'])
             assert target.read_bytes() == before and not panel.snapshot['running']
