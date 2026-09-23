@@ -5,17 +5,33 @@ set -euo pipefail
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-}"
 identity="${SIGNING_IDENTITY:-}"
+notary_profile="${APPLE_NOTARY_PROFILE:-}"
 
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "用法: SIGNING_IDENTITY=... APPLE_ID=... APPLE_ID_PASSWORD=... TEAM_ID=... $0 X.Y.Z" >&2
+    echo "用法: SIGNING_IDENTITY=... TEAM_ID=... APPLE_NOTARY_PROFILE=... $0 X.Y.Z" >&2
+    echo "  或: SIGNING_IDENTITY=... APPLE_ID=... APPLE_ID_PASSWORD=... TEAM_ID=... $0 X.Y.Z" >&2
     exit 2
 fi
-for variable_name in SIGNING_IDENTITY APPLE_ID APPLE_ID_PASSWORD TEAM_ID; do
+for variable_name in SIGNING_IDENTITY TEAM_ID; do
     if [[ -z "${!variable_name:-}" ]]; then
         echo "缺少发行参数: $variable_name" >&2
         exit 1
     fi
 done
+# Prefer the keychain profile so app-specific passwords stay out of the environment;
+# fall back to the explicit Apple ID triple for environments that provide it directly.
+notary_arguments=()
+if [[ -n "$notary_profile" ]]; then
+    notary_arguments=(--keychain-profile "$notary_profile")
+else
+    for variable_name in APPLE_ID APPLE_ID_PASSWORD; do
+        if [[ -z "${!variable_name:-}" ]]; then
+            echo "缺少发行参数: $variable_name（或设置 APPLE_NOTARY_PROFILE）" >&2
+            exit 1
+        fi
+    done
+    notary_arguments=(--apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$TEAM_ID")
+fi
 
 dist="$project_root/dist"
 dmg="$dist/Codex-Models.dmg"
@@ -45,9 +61,7 @@ details="$(/usr/bin/codesign -dvvv "$app" 2>&1)"
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$staging/app.zip"
 /usr/bin/xcrun notarytool submit "$staging/app.zip" \
-    --apple-id "$APPLE_ID" \
-    --password "$APPLE_ID_PASSWORD" \
-    --team-id "$TEAM_ID" \
+    "${notary_arguments[@]}" \
     --wait \
     --timeout 30m \
     --output-format json > "$dist/app-notarization.json"
@@ -67,9 +81,7 @@ test "$(/usr/bin/plutil -extract status raw -o - "$dist/app-notarization.json")"
     "$staged_dmg"
 /usr/bin/codesign --force --timestamp --sign "$identity" "$staged_dmg"
 /usr/bin/xcrun notarytool submit "$staged_dmg" \
-    --apple-id "$APPLE_ID" \
-    --password "$APPLE_ID_PASSWORD" \
-    --team-id "$TEAM_ID" \
+    "${notary_arguments[@]}" \
     --wait \
     --timeout 30m \
     --output-format json > "$dist/dmg-notarization.json"
