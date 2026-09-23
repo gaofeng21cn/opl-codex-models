@@ -14,9 +14,10 @@ MODE_LABELS = {'protocol': 'A · 协议兼容（建议先用）', 'off': '0 · �
 
 
 class BridgePanel(ttk.Frame):
-    def __init__(self, master, config_url, config_getter, client=None):
+    def __init__(self, master, config_url, config_getter, client=None, save_config=None):
         super().__init__(master, padding=22)
         self.client = client or BridgeClient(); self.config_getter = config_getter
+        self.save_config = save_config
         self.prefs_path = Path(config_url).with_name('connection.json')
         self.events = queue.Queue(); self.busy = False; self.snapshot = None; self.bound = False
         self._poll_id = None; self._queue_id = None; self.closed = False
@@ -114,12 +115,36 @@ class BridgePanel(ttk.Frame):
             self.target.set(cfg.codex_config_path or str(Path(cfg.merged_catalog_path).parent/'codex/config.toml'))
             self.backend.set('native')
         self.bound = True
+        # Keep the model page and the app config on exactly the connection page's
+        # selected config: adopt it when the app config is empty, and write the
+        # already-configured path back when connection.json does not exist yet.
+        self._propagate_config()
         self.after(200, self.refresh)
         self._poll_id = self.after(12000, self._poll)
 
+    def _propagate_config(self):
+        """Mirror the connection selection into the app config (and save it).
+
+        The model page and every catalog-based feature read codexConfigPath, so the
+        connection page's selected config must become the app config's value. A sync
+        failure never blocks the connection page.
+        """
+        cfg = self.config_getter()
+        if cfg is None: return
+        try:
+            from ..core.app_config import sync_connection_config
+            if sync_connection_config(cfg, self.config_url, save=False) and self.save_config:
+                self.save_config()
+        except Exception:  # noqa: BLE001 - a sync failure must not break the page
+            pass
+
+    def _load_prefs_dict(self):
+        try: data = json.loads(self.prefs_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeDecodeError): return {}
+        return data if isinstance(data, dict) else {}
+
     def _load_prefs(self):
-        try: data = json.loads(self.prefs_path.read_text())
-        except (OSError, ValueError): return
+        data = self._load_prefs_dict()
         for key, var in [('config', self.target), ('backend', self.backend), ('distro', self.distro), ('port', self.port), ('models', self.models)]:
             if key in data: var.set(str(data[key]))
 
@@ -164,7 +189,10 @@ class BridgePanel(ttk.Frame):
                 if action != 'status':
                     saved = {k: settings[k] for k in ('config', 'backend', 'distro', 'port')}
                     saved['models'] = ', '.join(settings['models'])
-                    try: atomic(self.prefs_path, json.dumps(saved, ensure_ascii=False, indent=2).encode())
+                    try:
+                        merged = {**self._load_prefs_dict(), **saved}
+                        atomic(self.prefs_path, json.dumps(merged, ensure_ascii=False, indent=2).encode())
+                        self._propagate_config()
                     except OSError: self.note.set('操作已完成，但窗口偏好保存失败。')
                 if callback: callback(result)
             else:

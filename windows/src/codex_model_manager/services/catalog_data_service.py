@@ -91,14 +91,30 @@ class CatalogDataService:
         self._write_catalog(path, updated)
 
     def add_model_to(self, draft, path: str) -> None:
-        """Add a model cloned from a template into `path` (backup + atomic write)."""
-        from ..core.custom_models import add_from_template
+        """Add a model into `path` (backup + atomic write).
+
+        With a source model the whole configuration is copied (unknown fields
+        included); without one (first model in an empty catalog) a minimal entry is
+        created from the fields the user supplied.
+        """
+        from ..core.custom_models import add_blank_model, add_from_template
         from ..parser import parse_catalog_models
 
         source_data = Path(path).read_bytes()
         existing = {m.slug for m in parse_catalog_models(source_data)}
-        updated = add_from_template(
-            draft, source_data, catalog_data=source_data, existing_slugs=existing)
+        if getattr(draft, "template_slug", ""):
+            updated = add_from_template(
+                draft, source_data, catalog_data=source_data, existing_slugs=existing)
+        else:
+            updated = add_blank_model(draft, source_data, existing_slugs=existing)
+        self._write_catalog(path, updated)
+
+    def remove_model_in(self, slug: str, path: str) -> None:
+        """Remove one model from `path` (backup + atomic write)."""
+        from ..core.custom_models import remove_model
+
+        source_data = Path(path).read_bytes()
+        updated = remove_model(slug, source_data, name=Path(path).name)
         self._write_catalog(path, updated)
 
     def _write_catalog(self, path: str, updated_data: bytes, prefix: str = "" ) -> None:
