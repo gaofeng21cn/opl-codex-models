@@ -27,6 +27,7 @@ def _m(paths, overrides=None, visibility=None):
         visibility_overrides=visibility or paths["visibility_overrides"],
         model_overrides=overrides if overrides is not None else paths["model_overrides"],
         codex_home_win=paths.get("codex_home_win"),
+        codex_home_explicit=paths.get("codex_home_explicit", False),
     )
 
 
@@ -94,7 +95,7 @@ def test_account_refresh_and_bundled_fallback(mock_runtime, tmp_path, monkeypatc
         "gpt-official", "vendor-model"]
 
 
-def test_wsl_auth_source_uses_selected_distribution(mock_runtime, monkeypatch):
+def test_wsl_auth_source_uses_configured_home_then_selected_distribution(mock_runtime, monkeypatch, tmp_path):
     from codex_model_manager.core import wsl_adapter
     from codex_model_manager.core.process_runner import ProcessResult
 
@@ -110,7 +111,17 @@ def test_wsl_auth_source_uses_selected_distribution(mock_runtime, monkeypatch):
     monkeypatch.setattr(wsl_adapter, "to_windows_path", lambda path, distro: (
         calls.append((distro, path)) or r"\\wsl.localhost\Ubuntu\home\someone\.codex\auth.json"))
     target = SimpleNamespace(is_wsl=True, distro="Ubuntu")
-    source = CatalogSyncService(_m(paths))._auth_source(target)
+    chosen_home = tmp_path / "chosen-home"
+    chosen_home.mkdir()
+    (chosen_home / "auth.json").write_text('{"token":"test"}', encoding="utf-8")
+    paths["codex_home_win"] = str(chosen_home)
+    paths["codex_home_explicit"] = True
+    service = CatalogSyncService(_m(paths))
+    assert service._auth_source(target) == chosen_home / "auth.json"
+    assert calls == []
+
+    (chosen_home / "auth.json").unlink()
+    source = service._auth_source(target)
     assert str(source).endswith("auth.json")
     assert calls[0][1] == ["--distribution", "Ubuntu", "--exec", "printenv", "HOME"]
     assert calls[1] == ("Ubuntu", "/home/someone/.codex/auth.json")

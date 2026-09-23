@@ -264,6 +264,7 @@ class AppConfiguration:
         from .runtime import classify, find_native, codex_home
 
         paths = self.resolved_paths()
+        paths.codex_home_explicit = bool(self.target_codex_home)
 
         if self.codex_runtime_path and self.codex_runtime_path.strip():
             runtime = _resolve_path(self.codex_runtime_path, "codexRuntimePath")

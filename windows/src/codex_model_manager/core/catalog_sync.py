@@ -51,6 +51,7 @@ class CatalogPaths:
     runtime_kind: Optional[str] = None
     runtime_distro: Optional[str] = None
     codex_home_win: Optional[str] = None
+    codex_home_explicit: bool = False
 
 
 @dataclass
@@ -308,6 +309,10 @@ class CatalogSyncService:
         """Use the selected runtime's identity without importing its config.toml."""
         if not target.is_wsl:
             return Path(self.paths.codex_home_win or Path.home() / ".codex") / "auth.json"
+        if self.paths.codex_home_explicit and self.paths.codex_home_win:
+            selected_auth = Path(self.paths.codex_home_win) / "auth.json"
+            if selected_auth.is_file():
+                return selected_auth
         from .wsl_adapter import filtered_windows_env, run_process, to_windows_path, wsl_exe
 
         exe = wsl_exe()
