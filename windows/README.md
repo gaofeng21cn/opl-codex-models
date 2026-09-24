@@ -40,7 +40,7 @@ python scripts/desktop_entry.py
 
 若当前 Codex 与供应商直连已能稳定执行工具，可以保持桥关闭；模型管理不依赖启用桥。保留桥作为兼容选项，不代表所有新版客户端仍需要它，也不保证消除所有工具故障。
 
-`context` 和 `both` 是实验模式，无法保证解决所有供应商或客户端的工具问题。开发捕获默认关闭，启用后可能保存模型输出。具体协议范围见 [TOOL_RECOVERY.md](TOOL_RECOVERY.md)。
+`context` 和 `both` 是实验模式，无法保证解决所有供应商或客户端的工具问题。当前 DeepSeek Flash 协议适配支持 `deepseek-flash` 和 `deepseek-v4.1-flash` 两个模型 ID；桥作用范围必须选择实际使用的准确 ID。开发捕获默认关闭，启用后可能保存模型输出。具体协议范围见 [TOOL_RECOVERY.md](TOOL_RECOVERY.md)。
 
 ## 验证和构建
 

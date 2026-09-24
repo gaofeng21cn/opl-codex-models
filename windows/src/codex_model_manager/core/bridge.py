@@ -77,6 +77,16 @@ from __future__ import annotations
 
 BRIDGE_VERSION = "2026.09.20.4"
 
+# These are two catalog IDs used for the same DeepSeek V4.1 Flash deployment in
+# the wild. Keep the protocol adapter keyed by IDs rather than by display names;
+# callers still choose the exact IDs in ``--only-model``/the GUI scope.
+DEEPSEEK_FLASH_MODEL_IDS = frozenset({"deepseek-flash", "deepseek-v4.1-flash"})
+
+
+def is_deepseek_flash_model(model):
+    """Return whether *model* uses the DeepSeek Flash reasoning adapter."""
+    return isinstance(model, str) and model in DEEPSEEK_FLASH_MODEL_IDS
+
 import json
 import http.client
 import queue
@@ -1305,7 +1315,7 @@ class BridgeServer:
                     response_id = body.get("id")
                     if isinstance(response_id, str) and response_id:
                         bridge.registry.put(owner + ":" + response_key(response_id), declarations)
-                    if incoming.get("model") == "deepseek-v4.1-flash":
+                    if is_deepseek_flash_model(incoming.get("model")):
                         body, normalized = normalize_deepseek_reasoning(body)
                         self._experiment_meta["reasoning_output_normalized"] = normalized
                         bridge.reasoning_history.remember(owner, body)
@@ -1388,7 +1398,7 @@ class BridgeServer:
                                                  context_recovery={"enabled": False}, route=route)
                     if selected:
                         self._experiment_meta["request_tools"] = _declaration_metadata(incoming)
-                    if selected and protocol and incoming.get("model") == "deepseek-v4.1-flash":
+                    if selected and protocol and is_deepseek_flash_model(incoming.get("model")):
                         import hashlib
                         owner = hashlib.sha256((self.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()).hexdigest()
                         incoming, normalized = normalize_deepseek_reasoning(incoming)

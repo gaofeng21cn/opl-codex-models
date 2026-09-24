@@ -1,5 +1,6 @@
 import copy
 import json
+import pytest
 from codex_model_manager.core.bridge import translate_request, translate_response, _sse_response
 
 
@@ -141,7 +142,8 @@ def test_message_anchor_repairs_missing_reasoning_and_idless_stub():
     assert cache.restore('owner',other)==(other,0)
 
 
-def test_http_roundtrip_repairs_omitted_reasoning_without_reexecuting_tools(tmp_path):
+@pytest.mark.parametrize("model_id", ["deepseek-v4.1-flash", "deepseek-flash"])
+def test_http_roundtrip_repairs_omitted_reasoning_without_reexecuting_tools(tmp_path, model_id):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.request import Request, urlopen
@@ -164,12 +166,12 @@ def test_http_roundtrip_repairs_omitted_reasoning_without_reexecuting_tools(tmp_
     relay=ThreadingHTTPServer(('127.0.0.1',0),Relay)
     rw=threading.Thread(target=relay.serve_forever,daemon=True);rw.start()
     record=tmp_path/'metadata.jsonl'
-    bridge=BridgeServer(f'http://127.0.0.1:{relay.server_port}',port=0,record_path=str(record),scoped_models=frozenset({'deepseek-v4.1-flash'}))
+    bridge=BridgeServer(f'http://127.0.0.1:{relay.server_port}',port=0,record_path=str(record),scoped_models=frozenset({model_id}))
     bw=threading.Thread(target=bridge.serve_forever,daemon=True);bw.start();assert bridge.wait_ready()
     def post(payload):
         with urlopen(Request(f'http://127.0.0.1:{bridge.bound_port}/responses',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'}),timeout=5) as r:return json.load(r)
     try:
-        p={'model':'deepseek-v4.1-flash','tools':[{'type':'custom','name':'exec'}],'input':[{'role':'user','content':'run'}]}
+        p={'model':model_id,'tools':[{'type':'custom','name':'exec'}],'input':[{'role':'user','content':'run'}]}
         first=post(p);translated=first['output'][1];assert translated['type']=='custom_tool_call'
         post(dict(p,input=p['input']+[translated,{'type':'custom_tool_call_output','call_id':'unique-call','output':'OK'}]))
         assert len(received)==2
