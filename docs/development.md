@@ -22,7 +22,7 @@ SwiftPM 按 `Package.swift` 和 `Package.resolved` 解析 TOMLKit，首次构建
 ```
 
 该命令停止已有开发进程，将临时签名构建写入
-`~/Applications/CodexModelManager.app`，启动应用，并确认进程和内置
+`~/Applications/CodexModelManager-Dev.app`，启动应用，并确认进程和内置
 `CodexModelSync` helper 存在。它不证明每日同步或用户配置已生效。
 
 GUI 和同步 helper 复用 `Sources/CodexModelCore`。排查模型合并与设置问题时，

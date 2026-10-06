@@ -34,7 +34,10 @@ if [[ -z "$user_home_dir" || "$user_home_dir" != /* || "$user_home_dir" == "/" ]
     exit 1
 fi
 
-app_path="$user_home_dir/Applications/CodexModelManager.app"
+# Keep the ad-hoc development build separate from the notarized install. Using
+# the same path would replace the signed app and trigger Gatekeeper on the next
+# launch.
+app_path="$user_home_dir/Applications/CodexModelManager-Dev.app"
 /usr/bin/pkill -x CodexModelManager 2>/dev/null || true
 "$project_root/script/build_app.sh" --configuration debug --output "$app_path"
 
