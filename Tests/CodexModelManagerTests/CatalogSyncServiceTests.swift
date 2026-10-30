@@ -81,6 +81,23 @@ final class CatalogSyncServiceTests: XCTestCase {
             ReasoningSettings(supportedEfforts: ["low"], defaultEffort: "max"), for: "vendor-model"
         ))
         XCTAssertEqual(try Data(contentsOf: custom), savedSource)
+
+        let dataService = CatalogDataService(paths: paths)
+        XCTAssertThrowsError(try dataService.deleteCustomModel(slug: "gpt-official"))
+        XCTAssertEqual(try Data(contentsOf: custom), savedSource)
+
+        try dataService.deleteCustomModel(slug: "vendor-model")
+        let deletionBackups = try FileManager.default.contentsOfDirectory(at: paths.backupDirectory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("custom-models.") }
+        XCTAssertEqual(deletionBackups.count, 2)
+        XCTAssertTrue(try deletionBackups.contains { try Data(contentsOf: $0) == savedSource })
+        XCTAssertEqual(try service.syncAndAppendLog().status, "updated")
+        let afterDeletion = try CatalogParser.parseModels(
+            customData: Data(contentsOf: custom), catalogData: Data(contentsOf: paths.mergedCatalog)
+        )
+        XCTAssertEqual(afterDeletion.map(\.slug), ["gpt-official"])
+        XCTAssertEqual(afterDeletion.first?.source, .official)
+        XCTAssertEqual(try service.syncAndAppendLog().status, "no_change")
     }
 
     func testOfficialCatalogPrefersAccountBackedRefreshAndFallsBackToBundled() throws {

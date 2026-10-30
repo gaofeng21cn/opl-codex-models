@@ -1,6 +1,22 @@
 import Foundation
 
 enum CustomModelEditor {
+    static func removing(slug: String, from sourceData: Data) throws -> Data {
+        guard
+            var root = try JSONSerialization.jsonObject(with: sourceData) as? [String: Any],
+            var models = root["models"] as? [[String: Any]],
+            let index = models.firstIndex(where: { $0["slug"] as? String == slug })
+        else {
+            throw AppError.invalidData("只能删除自定义模型源中已有的模型。")
+        }
+        models.remove(at: index)
+        root["models"] = models
+        return try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        ) + Data([0x0A])
+    }
+
     static func adding(
         draft: NewModelDraft,
         to sourceData: Data,

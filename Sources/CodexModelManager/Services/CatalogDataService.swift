@@ -48,6 +48,12 @@ struct CatalogDataService {
         try writeCustomSource(updatedData, replacing: sourceData)
     }
 
+    func deleteCustomModel(slug: String) throws {
+        let sourceData = try Data(contentsOf: paths.customSource)
+        let updatedData = try CustomModelEditor.removing(slug: slug, from: sourceData)
+        try writeCustomSource(updatedData, replacing: sourceData)
+    }
+
     private func writeCustomSource(_ updatedData: Data, replacing sourceData: Data) throws {
         try FileManager.default.createDirectory(
             at: paths.backupDirectory,

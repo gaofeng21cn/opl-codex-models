@@ -8,6 +8,7 @@ final class CatalogStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var isSyncing = false
     @Published private(set) var isAddingModel = false
+    @Published private(set) var isDeletingModel = false
     @Published private(set) var isSavingReasoning = false
     @Published private(set) var isApplyingConfiguration = false
     @Published var errorMessage: String?
@@ -20,7 +21,7 @@ final class CatalogStore: ObservableObject {
     private var configurationErrorMessage: String?
 
     var isConfigured: Bool { service != nil }
-    var isBusy: Bool { isSyncing || isAddingModel || isSavingReasoning || isApplyingConfiguration }
+    var isBusy: Bool { isSyncing || isAddingModel || isDeletingModel || isSavingReasoning || isApplyingConfiguration }
 
     init(configurationURL: URL = AppConfiguration.defaultURL) {
         self.configurationURL = configurationURL
@@ -140,6 +141,28 @@ final class CatalogStore: ObservableObject {
 
     func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func deleteModel(_ model: CatalogModel) async -> Bool {
+        guard !isBusy, model.source == .custom, let service else { return false }
+        isDeletingModel = true
+        defer { isDeletingModel = false }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try service.deleteCustomModel(slug: model.slug)
+                do {
+                    try service.runSync()
+                } catch {
+                    throw AppError.invalidData("删除已保存，目录同步未完成。请点击“立即同步”重试。\n\(error.localizedDescription)")
+                }
+            }.value
+            await refresh()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            await refresh()
+            return false
+        }
     }
 
     func updateReasoning(_ settings: ReasoningSettings, for slug: String) async -> Bool {

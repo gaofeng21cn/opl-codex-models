@@ -3,6 +3,30 @@ import XCTest
 @testable import CodexModelManager
 
 final class CustomModelEditorTests: XCTestCase {
+    func testRemovingPreservesRemainingModelsOrderAndUnknownMetadata() throws {
+        let first: [String: Any] = ["slug": "keep-first", "provider_metadata": ["tools": true]]
+        let last: [String: Any] = ["slug": "keep-last", "context_window": 200_000]
+        let source = try JSONSerialization.data(withJSONObject: [
+            "schema": "future.v2", "source": ["owner": "local"],
+            "models": [first, ["slug": "remove-me"], last]
+        ])
+        let updated = try CustomModelEditor.removing(slug: "remove-me", from: source)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        XCTAssertEqual(root["schema"] as? String, "future.v2")
+        XCTAssertEqual(root["source"] as? [String: String], ["owner": "local"])
+        XCTAssertEqual(root["models"] as? NSArray, [first, last] as NSArray)
+    }
+
+    func testRemovingLastModelAllowsEmptySourceAndRejectsMissingOrOfficialModels() throws {
+        let source = Data(#"{"schema":"custom.v1","models":[{"slug":"only-custom"}]}"#.utf8)
+        let updated = try CustomModelEditor.removing(slug: "only-custom", from: source)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        XCTAssertEqual((root["models"] as? [Any])?.count, 0)
+        XCTAssertThrowsError(try CustomModelEditor.removing(slug: "gpt-official", from: source))
+        XCTAssertThrowsError(try CustomModelEditor.removing(slug: "only-custom", from: updated))
+        XCTAssertThrowsError(try CustomModelEditor.removing(slug: "only-custom", from: Data(#"{"models":{}}"#.utf8)))
+    }
+
     func testAddingClonesTemplateAndOverridesEditableFields() throws {
         let source = try JSONSerialization.data(withJSONObject: [
             "models": [[

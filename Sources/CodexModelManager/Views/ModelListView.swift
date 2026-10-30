@@ -10,6 +10,7 @@ struct ModelListView: View {
 
     @State private var searchText = ""
     @State private var selection: CatalogModel.ID?
+    @State private var modelToDelete: CatalogModel?
 
     private var filteredModels: [CatalogModel] {
         guard !searchText.isEmpty else { return models }
@@ -36,6 +37,14 @@ struct ModelListView: View {
                         .lineLimit(2)
                 }
                 Spacer()
+                if let model = selectedModel, model.source == .custom {
+                    Button(role: .destructive) {
+                        modelToDelete = model
+                    } label: {
+                        Label("删除模型", systemImage: "trash")
+                    }
+                    .disabled(store.isBusy)
+                }
                 if let addAction {
                     Button(action: addAction) {
                         Label("新增模型", systemImage: "plus")
@@ -85,6 +94,18 @@ struct ModelListView: View {
                     }
                     .width(min: 60, ideal: 70, max: 85)
                 }
+                .contextMenu(forSelectionType: CatalogModel.ID.self) { identifiers in
+                    if identifiers.count == 1,
+                       let model = filteredModels.first(where: { identifiers.contains($0.id) }),
+                       model.source == .custom {
+                        Button(role: .destructive) {
+                            modelToDelete = model
+                        } label: {
+                            Label("删除模型…", systemImage: "trash")
+                        }
+                        .disabled(store.isBusy)
+                    }
+                }
                 .frame(minWidth: 620)
                 .clipped()
 
@@ -96,6 +117,25 @@ struct ModelListView: View {
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "搜索模型")
         .navigationTitle(title)
+        .alert(
+            "删除自定义模型？",
+            isPresented: Binding(
+                get: { modelToDelete != nil },
+                set: { if !$0 { modelToDelete = nil } }
+            ),
+            presenting: modelToDelete
+        ) { model in
+            Button("删除并同步", role: .destructive) {
+                Task {
+                    if await store.deleteModel(model), selection == model.id {
+                        selection = nil
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { model in
+            Text("将删除“\(model.displayName)”（\(model.slug)），并更新 Codex 模型目录。删除前会自动备份。")
+        }
     }
 }
 
