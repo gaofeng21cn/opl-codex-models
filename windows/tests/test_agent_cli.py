@@ -37,6 +37,7 @@ def run(catalog, *arguments):
     completed = subprocess.run(
         [sys.executable, "-m", "codex_model_manager", "--config", str(catalog[0]), *arguments],
         env={**os.environ, "PYTHONPATH": source_root}, capture_output=True, text=True,
+        encoding="utf-8",  # The CLI stream contract is UTF-8, including on ANSI Windows hosts.
     )
     assert not completed.stderr, completed.stderr
     return completed.returncode, json.loads(completed.stdout)
