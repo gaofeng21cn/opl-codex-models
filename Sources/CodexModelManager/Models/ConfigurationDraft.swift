@@ -3,6 +3,7 @@ import Foundation
 
 struct ConfigurationDraft: Equatable {
     var codexRuntimePath = ""
+    var codexHomePath = ""
     var customSourcePath = ""
     var mergedCatalogPath = ""
     var syncLogPath = ""
@@ -17,6 +18,7 @@ struct ConfigurationDraft: Equatable {
 
     init(configuration: AppConfiguration) {
         codexRuntimePath = configuration.codexRuntimePath ?? ""
+        codexHomePath = configuration.codexHomePath ?? ""
         customSourcePath = configuration.customSourcePath
         mergedCatalogPath = configuration.mergedCatalogPath
         syncLogPath = configuration.syncLogPath
@@ -39,7 +41,8 @@ struct ConfigurationDraft: Equatable {
             launchAgentLabel: launchAgentLabel,
             backupDirectoryPath: backupDirectoryPath,
             visibilityOverrides: visibilityOverrides,
-            modelOverrides: modelOverrides
+            modelOverrides: modelOverrides,
+            codexHomePath: codexHomePath.isEmpty ? nil : codexHomePath
         )
     }
 

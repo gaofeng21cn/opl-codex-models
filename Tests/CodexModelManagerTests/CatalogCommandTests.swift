@@ -96,13 +96,14 @@ final class CatalogCommandTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let config = directory.appendingPathComponent("config.json")
-        let configuration = AppConfiguration(codexRuntimePath: "/usr/bin/false",
+        var configuration = AppConfiguration(codexRuntimePath: "/usr/bin/false",
             customSourcePath: directory.appendingPathComponent("custom.json").path,
             mergedCatalogPath: directory.appendingPathComponent("catalog.json").path,
             syncLogPath: directory.appendingPathComponent("sync.log").path,
             errorLogPath: directory.appendingPathComponent("error.log").path,
             launchAgentPlistPath: directory.appendingPathComponent("sync.plist").path,
             launchAgentLabel: "test.catalog", backupDirectoryPath: directory.appendingPathComponent("backups").path)
+        configuration.codexHomePath = directory.appendingPathComponent("codex-home").path
         try configuration.save(to: config)
         let paths = try configuration.resolved()
         try Data(#"{"schema":"future.v2","models":[]}"#.utf8).write(to: paths.customSource)

@@ -30,7 +30,7 @@ brew install --cask opl-codex-models
 
 - 在本机已发现的 Codex 中自动选择最新版本，包括独立安装和 ChatGPT 附带的版本
 - 创建自定义模型源和合并模型目录
-- 将模型目录写入 `~/.codex/config.toml`
+- 将模型目录写入所选 Codex 用户目录的 `config.toml`（默认 `~/.codex/config.toml`）
 - 安装每 24 小时执行一次、并在 Codex 运行时文件变化时触发的后台同步任务
 
 不需要复制配置文件，也不需要手工填写本机路径。需要沿用现有目录或任务时，可在“设置”中修改所有路径后再应用。
@@ -58,7 +58,9 @@ brew install --cask opl-codex-models
 
 ## 模型上下文从哪里来
 
-官方模型的上下文窗口来自 Codex 官方目录。应用优先使用本机账号在线刷新，这样刚发布、尚未进入 Codex 内置清单的模型也能及时出现；未登录或刷新失败时回退到内置清单。同步日志中的 `official_source` 会记录本次用的是 `refresh` 还是 `bundled`。
+官方模型的上下文窗口来自 Codex 官方目录。应用优先使用所选 Codex 用户目录中的文件凭据在线刷新，这样刚发布、尚未进入 Codex 内置清单的模型也能及时出现；无法刷新时使用内置清单。同步日志中的 `official_source` 记录 `refresh` 或 `bundled`，`official_fallback_reason` 说明降级原因，`codex_home` 标明本次使用的目录，不包含凭据内容。
+
+在线目录查询在临时目录中运行，不继承 `model_catalog_json`，避免把自定义模型读回成官方模型；同时移除父进程的 Codex/OpenAI 认证环境变量，防止启动它的 shell 覆盖所选账户。当前支持所选目录的 `auth.json` 文件存储；若其 `config.toml` 使用 `keyring`、`auto` 或 `ephemeral`，会返回 `credential_store_requires_native_access` 并使用内置清单，不读取遗留 `auth.json` 或其他账户。缺少文件凭据、配置不可读、刷新失败分别返回 `file_credentials_unavailable`、`credential_configuration_unavailable`、`refresh_unavailable`。原生凭据仍由 Codex 管理；无需向 Models 再录入密钥。存储模式含义见 [Codex 官方认证说明](https://learn.chatgpt.com/docs/auth#credential-storage)。
 
 自定义模型的标准模型列表通常不提供上下文窗口，因此新增时会先复制所选模板的值，再由用户确认。图像输入能力也按模板复制，可以在保存前调整。
 
@@ -84,7 +86,7 @@ Codex 官方模型 ─┐
 
 ## 实验性上下文管理
 
-在“设置 → 实验功能”中打开开关，会更新本机 `~/.codex/config.toml` 的 `features.context_management.experimental_mode`，并保留其他设置和注释。更改前会自动备份。
+在“设置 → 实验功能”中打开开关，会更新所选 Codex 用户目录的 `config.toml` 中的 `features.context_management.experimental_mode`，并保留其他设置和注释。更改前会自动备份。
 
 “已开启”表示配置已写入，不代表当前会话已经启用该功能。按 [Codex 官方说明](https://learn.chatgpt.com/docs/config-file/config-reference)，这项能力目前需要符合条件的 ChatGPT 登录会话；自定义供应商仍可保存实验开关，但应用会明确显示暂未获得官方支持。应用不自动切换供应商，也不修改底层 token 预算参数。
 
@@ -97,6 +99,8 @@ Codex 官方模型 ─┐
 ```
 
 普通使用不需要直接编辑这个文件。仓库中的 `Config/config.example.json` 只用于排查问题或自动化部署，其中不含个人路径、令牌或密钥。
+
+“设置 → 模型目录 → Codex 用户目录”对应 `codexHomePath`，决定账号来源和 Codex 配置目标；运行时、自定义模型源及合并目录也保存在同一份配置。首次推荐设置读取当时的 `CODEX_HOME`（未设置时用 `~/.codex`）并保存为固定目录，随后 GUI、CLI 和每日任务使用相同目标，不随启动环境改变。旧配置没有该字段时继续使用 `~/.codex`。切换用户目录不会自动搬动已有模型源或合并目录，请在同一页确认这些路径后保存并应用。
 
 `modelOverrides` 按官方模型标识保存字段级覆盖，目前仅支持 `context_window` 和 `max_context_window`，未填写的字段不覆盖。例如只固定当前上下文：
 

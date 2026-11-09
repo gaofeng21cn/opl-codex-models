@@ -10,7 +10,8 @@ public enum ProcessRunner {
     public static func run(
         _ executable: URL,
         arguments: [String],
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        excludingEnvironmentKeys: [String] = []
     ) throws -> ProcessResult {
         let process = Process()
         let outputPipe = Pipe()
@@ -19,8 +20,10 @@ public enum ProcessRunner {
         process.arguments = arguments
         process.standardOutput = outputPipe
         process.standardError = errorPipe
-        if let environment {
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+        if environment != nil || !excludingEnvironmentKeys.isEmpty {
+            var childEnvironment = ProcessInfo.processInfo.environment.merging(environment ?? [:]) { _, new in new }
+            for key in excludingEnvironmentKeys { childEnvironment.removeValue(forKey: key) }
+            process.environment = childEnvironment
         }
         let output = DataBox()
         let errors = DataBox()

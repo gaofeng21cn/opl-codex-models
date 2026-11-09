@@ -1,6 +1,7 @@
 {
   "backupDirectoryPath": "~/Library/Application Support/CodexModelManager/Backups",
   "codexRuntimePath": null,
+  "codexHomePath": "~/.codex",
   "customSourcePath": "~/.codex/custom-models.json",
   "errorLogPath": "~/Library/Logs/CodexModelManager/sync.error.log",
   "launchAgentLabel": "com.onepersonlab.codex-model-manager.sync",

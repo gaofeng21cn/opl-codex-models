@@ -22,6 +22,8 @@ final class AppConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(paths.mergedCatalog.path, "/var/tmp/models.json")
         XCTAssertEqual(paths.launchAgentLabel, "com.example.model-catalog-sync")
+        XCTAssertEqual(paths.codexHome.path, "/tmp/codex-model-manager-home/.codex")
+        XCTAssertEqual(paths.codexConfiguration.path, "/tmp/codex-model-manager-home/.codex/config.toml")
         XCTAssertTrue(paths.visibilityOverrides.isEmpty)
         XCTAssertTrue(paths.modelOverrides.isEmpty)
         XCTAssertEqual(
@@ -58,9 +60,11 @@ final class AppConfigurationTests: XCTestCase {
         var configuration = try AppConfiguration.read(from: url)
         configuration.visibilityOverrides = ["official": .list]
         configuration.modelOverrides = ["official": ModelFieldOverrides(contextWindow: 393_216)]
+        configuration.codexHomePath = "/tmp/selected-codex-home"
         let draft = ConfigurationDraft(configuration: configuration)
         try draft.configuration.save(to: url)
         XCTAssertEqual(try AppConfiguration.read(from: url), configuration)
+        XCTAssertEqual(try AppConfiguration.load(from: url).codexHome.path, "/tmp/selected-codex-home")
         XCTAssertEqual(try AppConfiguration.load(from: url).modelOverrides, configuration.modelOverrides)
         let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
         let overrides = root["modelOverrides"] as! [String: [String: Int]]

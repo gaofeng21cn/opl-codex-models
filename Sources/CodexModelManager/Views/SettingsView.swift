@@ -46,6 +46,12 @@ struct SettingsView: View {
                     }
                 }
 
+                LabeledContent("Codex 用户目录") {
+                    TextField("~/.codex", text: $draft.codexHomePath)
+                        .multilineTextAlignment(.trailing)
+                        .help("账号来源和 config.toml 所在目录；留空沿用 ~/.codex。模型源和合并目录保持下方所选路径。")
+                }
+
                 LabeledContent("合并模型目录") {
                     TextField("模型目录", text: $draft.mergedCatalogPath)
                         .multilineTextAlignment(.trailing)

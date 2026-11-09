@@ -30,12 +30,9 @@ public struct SetupService {
         try configuration.save(to: configurationURL)
 
         if updateCodexConfiguration {
-            let codexConfiguration = homeDirectory
-                .appendingPathComponent(".codex", isDirectory: true)
-                .appendingPathComponent("config.toml")
             try CodexConfigurationEditor.setModelCatalog(
                 paths.mergedCatalog,
-                in: codexConfiguration,
+                in: paths.codexConfiguration,
                 backupDirectory: paths.backupDirectory
             )
         }
