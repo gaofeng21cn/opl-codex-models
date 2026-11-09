@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import TOMLKit
 
 public struct CatalogSyncResult: Sendable {
     public let status: String
@@ -8,14 +9,15 @@ public struct CatalogSyncResult: Sendable {
 
 public struct CatalogSyncService: Sendable {
     public let paths: CatalogPaths
-    public let homeDirectory: URL
+    // Codex debug models permits process credentials to override file auth.
+    // This query is bound to the selected home, not the launching shell account.
+    private static let credentialEnvironmentKeys = [
+        "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+        "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"
+    ]
 
-    public init(
-        paths: CatalogPaths,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) {
+    public init(paths: CatalogPaths) {
         self.paths = paths
-        self.homeDirectory = homeDirectory
     }
 
     public func ensureInitialFiles() throws {
@@ -150,6 +152,8 @@ public struct CatalogSyncService: Sendable {
             "custom_hash": customHash,
             "catalog": paths.mergedCatalog.path,
             "official_source": officialCatalog.source,
+            "official_fallback_reason": officialCatalog.fallbackReason,
+            "codex_home": paths.codexHome.path,
             "bundled_count": bundledModels.count,
             "custom_count": prioritizedCustom.count,
             "applied_model_overrides": appliedOverrides,
@@ -173,6 +177,7 @@ public struct CatalogSyncService: Sendable {
     private struct OfficialCatalog {
         let output: String
         let source: String
+        var fallbackReason: String? = nil
     }
 
     /// The online catalog is account-backed, so newly released models appear before the bundled
@@ -180,10 +185,31 @@ public struct CatalogSyncService: Sendable {
     /// home would resolve `model_catalog_json` to our own merged catalog and echo custom models
     /// back as official ones. If refresh is unavailable, fall back to the bundled list.
     private func readOfficialCatalog() throws -> OfficialCatalog {
+        if let reason = fileCredentialFallbackReason() {
+            return try readBundledOfficialCatalog(fallbackReason: reason)
+        }
         if let refreshed = try? readRefreshedOfficialCatalog(), !refreshed.output.isEmpty {
             return refreshed
         }
-        return try readBundledOfficialCatalog()
+        return try readBundledOfficialCatalog(fallbackReason: "refresh_unavailable")
+    }
+
+    private func fileCredentialFallbackReason() -> String? {
+        // A stale auth.json must not stand in for the account selected by a
+        // native credential store. Keep native credentials with Codex itself.
+        do {
+            if FileManager.default.fileExists(atPath: paths.codexConfiguration.path) {
+                let config = try TOMLTable(string: String(contentsOf: paths.codexConfiguration, encoding: .utf8))
+                if let value = config["cli_auth_credentials_store"] {
+                    guard let store = value.tomlValue.string else { return "credential_configuration_unavailable" }
+                    guard store == "file" else { return "credential_store_requires_native_access" }
+                }
+            }
+        } catch {
+            return "credential_configuration_unavailable"
+        }
+        return FileManager.default.fileExists(atPath: paths.codexHome.appendingPathComponent("auth.json").path)
+            ? nil : "file_credentials_unavailable"
     }
 
     private func readRefreshedOfficialCatalog() throws -> OfficialCatalog? {
@@ -191,26 +217,26 @@ public struct CatalogSyncService: Sendable {
             "codex-model-manager-\(UUID().uuidString)",
             isDirectory: true
         )
-        try FileManager.default.createDirectory(at: isolatedCodexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: isolatedCodexHome, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         defer { try? FileManager.default.removeItem(at: isolatedCodexHome) }
 
-        let authSource = Self.codexAuthFile(homeDirectory: homeDirectory)
-        if FileManager.default.fileExists(atPath: authSource.path) {
-            try FileManager.default.copyItem(
-                at: authSource,
-                to: isolatedCodexHome.appendingPathComponent("auth.json")
-            )
-        }
+        let isolatedAuth = isolatedCodexHome.appendingPathComponent("auth.json")
+        try FileManager.default.copyItem(at: paths.codexHome.appendingPathComponent("auth.json"), to: isolatedAuth)
+        try Self.setPrivatePermissions(isolatedAuth)
         let result = try ProcessRunner.run(
             paths.codexRuntime,
-            arguments: ["debug", "models"],
-            environment: ["CODEX_HOME": isolatedCodexHome.path]
+            arguments: ["-c", "cli_auth_credentials_store=\"file\"", "debug", "models"],
+            environment: ["CODEX_HOME": isolatedCodexHome.path],
+            excludingEnvironmentKeys: Self.credentialEnvironmentKeys
         )
         guard result.exitCode == 0, !result.standardOutput.isEmpty else { return nil }
         return OfficialCatalog(output: result.standardOutput, source: "refresh")
     }
 
-    private func readBundledOfficialCatalog() throws -> OfficialCatalog {
+    private func readBundledOfficialCatalog(fallbackReason: String) throws -> OfficialCatalog {
         let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
             "codex-model-manager-\(UUID().uuidString)",
             isDirectory: true
@@ -220,21 +246,14 @@ public struct CatalogSyncService: Sendable {
 
         let bundledResult = try ProcessRunner.run(
             paths.codexRuntime,
-            arguments: ["debug", "models", "--bundled"],
-            environment: ["CODEX_HOME": isolatedCodexHome.path]
+            arguments: ["-c", "cli_auth_credentials_store=\"file\"", "debug", "models", "--bundled"],
+            environment: ["CODEX_HOME": isolatedCodexHome.path],
+            excludingEnvironmentKeys: Self.credentialEnvironmentKeys
         )
         guard bundledResult.exitCode == 0 else {
             throw CoreError.processFailed(Self.processMessage("读取 Codex 官方模型失败", bundledResult))
         }
-        return OfficialCatalog(output: bundledResult.standardOutput, source: "bundled")
-    }
-
-    private static func codexAuthFile(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> URL {
-        homeDirectory
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("auth.json")
+        return OfficialCatalog(output: bundledResult.standardOutput, source: "bundled", fallbackReason: fallbackReason)
     }
 
     public func syncAndAppendLog() throws -> CatalogSyncResult {

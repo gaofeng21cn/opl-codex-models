@@ -28,17 +28,18 @@ struct ContextManagementView: View {
             Section {
                 Link("官方支持条件", destination: URL(string: "https://learn.chatgpt.com/docs/config-file/config-reference")!)
                 Button {
-                    store.reveal(ContextManagementSettings.configurationURL)
+                    if let url = store.paths?.codexConfiguration { store.reveal(url) }
                 } label: {
                     Label("打开 Codex 配置", systemImage: "doc.text")
                 }
+                .disabled(store.paths == nil)
             }
             if let error {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
             }
         }
         .formStyle(.grouped)
-        .task { await reload() }
+        .task(id: store.paths?.codexConfiguration) { await reload() }
     }
 
     private var supportStatus: String {
@@ -49,21 +50,30 @@ struct ContextManagementView: View {
     }
 
     private func reload() async {
+        guard let url = store.paths?.codexConfiguration else {
+            settings = nil
+            return
+        }
         do {
-            let current = try await Task.detached { try ContextManagementSettings.read() }.value
+            let current = try await Task.detached { try ContextManagementSettings.read(from: url) }.value
+            guard store.paths?.codexConfiguration == url else { return }
             settings = current
             enabled = current.enabled
             error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard store.paths?.codexConfiguration == url else { return }
+            settings = nil
+            self.error = error.localizedDescription
+        }
     }
 
     private func save(_ value: Bool) async {
-        guard let backups = store.paths?.backupDirectory, !saving else { return }
+        guard let paths = store.paths, !saving else { return }
         saving = true
         defer { saving = false }
         do {
             try await Task.detached {
-                try ContextManagementSettings.setEnabled(value, backupDirectory: backups)
+                try ContextManagementSettings.setEnabled(value, in: paths.codexConfiguration, backupDirectory: paths.backupDirectory)
             }.value
             await reload()
         } catch { self.error = error.localizedDescription }

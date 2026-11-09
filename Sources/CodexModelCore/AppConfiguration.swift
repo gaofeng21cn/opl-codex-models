@@ -2,6 +2,8 @@ import Foundation
 
 public struct CatalogPaths: Equatable, Sendable {
     public let codexRuntime: URL
+    public let codexHome: URL
+    public var codexConfiguration: URL { codexHome.appendingPathComponent("config.toml") }
     public let customSource: URL
     public let mergedCatalog: URL
     public let syncLog: URL
@@ -14,6 +16,7 @@ public struct CatalogPaths: Equatable, Sendable {
 
     public init(
         codexRuntime: URL,
+        codexHome: URL,
         customSource: URL,
         mergedCatalog: URL,
         syncLog: URL,
@@ -25,6 +28,7 @@ public struct CatalogPaths: Equatable, Sendable {
         modelOverrides: [String: ModelFieldOverrides] = [:]
     ) {
         self.codexRuntime = codexRuntime
+        self.codexHome = codexHome
         self.customSource = customSource
         self.mergedCatalog = mergedCatalog
         self.syncLog = syncLog
@@ -39,6 +43,7 @@ public struct CatalogPaths: Equatable, Sendable {
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
     public var codexRuntimePath: String?
+    public var codexHomePath: String?
     public var customSourcePath: String
     public var mergedCatalogPath: String
     public var syncLogPath: String
@@ -59,9 +64,11 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         launchAgentLabel: String,
         backupDirectoryPath: String,
         visibilityOverrides: [String: ModelVisibility]? = nil,
-        modelOverrides: [String: ModelFieldOverrides]? = nil
+        modelOverrides: [String: ModelFieldOverrides]? = nil,
+        codexHomePath: String? = nil
     ) {
         self.codexRuntimePath = codexRuntimePath
+        self.codexHomePath = codexHomePath
         self.customSourcePath = customSourcePath
         self.mergedCatalogPath = mergedCatalogPath
         self.syncLogPath = syncLogPath
@@ -81,12 +88,16 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     }
 
     public static func recommended(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> AppConfiguration {
         guard CodexRuntimeLocator.find() != nil else {
             throw CoreError.runtimeNotFound
         }
-        let codexDirectory = homeDirectory.appendingPathComponent(".codex", isDirectory: true)
+        let codexDirectory = try resolve(
+            environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "~/.codex",
+            field: "CODEX_HOME", homeDirectory: homeDirectory
+        )
         let supportDirectory = homeDirectory
             .appendingPathComponent("Library/Application Support", isDirectory: true)
             .appendingPathComponent("CodexModelManager", isDirectory: true)
@@ -104,7 +115,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
                 .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
                 .appendingPathComponent("\(label).plist").path,
             launchAgentLabel: label,
-            backupDirectoryPath: supportDirectory.appendingPathComponent("Backups", isDirectory: true).path
+            backupDirectoryPath: supportDirectory.appendingPathComponent("Backups", isDirectory: true).path,
+            codexHomePath: codexDirectory.path
         )
     }
 
@@ -146,6 +158,10 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
 
         return CatalogPaths(
             codexRuntime: runtime,
+            // Legacy configurations retain their original default target. Only
+            // recommended setup captures CODEX_HOME; saved targets never drift
+            // with GUI, shell, or launchd environment differences.
+            codexHome: try Self.resolve(codexHomePath ?? "~/.codex", field: "codexHomePath", homeDirectory: homeDirectory),
             customSource: try Self.resolve(customSourcePath, field: "customSourcePath", homeDirectory: homeDirectory),
             mergedCatalog: try Self.resolve(mergedCatalogPath, field: "mergedCatalogPath", homeDirectory: homeDirectory),
             syncLog: try Self.resolve(syncLogPath, field: "syncLogPath", homeDirectory: homeDirectory),

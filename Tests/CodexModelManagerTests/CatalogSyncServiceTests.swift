@@ -144,17 +144,18 @@ final class CatalogSyncServiceTests: XCTestCase {
         let custom = directory.appendingPathComponent("custom.json")
         try Data(#"{"models":[],"schema":"x"}"#.utf8).write(to: custom)
 
-        let paths = makePaths(directory: directory, runtime: runtime, custom: custom)
-        let refreshed = try CatalogSyncService(paths: paths, homeDirectory: home).sync()
+        let paths = makePaths(directory: directory, runtime: runtime, custom: custom, codexHome: home.appendingPathComponent(".codex"))
+        let refreshed = try CatalogSyncService(paths: paths).sync()
         let refreshedRecord = try JSONSerialization.jsonObject(with: refreshed.recordData) as! [String: Any]
         XCTAssertEqual(refreshedRecord["official_source"] as? String, "refresh")
         var slugs = try readSlugs(paths)
         XCTAssertEqual(slugs, ["gpt-bundled", "gpt-new-sol"])
 
         try FileManager.default.removeItem(at: home.appendingPathComponent(".codex/auth.json"))
-        let bundled = try CatalogSyncService(paths: paths, homeDirectory: home).sync()
+        let bundled = try CatalogSyncService(paths: paths).sync()
         let bundledRecord = try JSONSerialization.jsonObject(with: bundled.recordData) as! [String: Any]
         XCTAssertEqual(bundledRecord["official_source"] as? String, "bundled")
+        XCTAssertEqual(bundledRecord["official_fallback_reason"] as? String, "file_credentials_unavailable")
         slugs = try readSlugs(paths)
         XCTAssertEqual(slugs, ["gpt-bundled"])
     }
@@ -282,10 +283,12 @@ final class CatalogSyncServiceTests: XCTestCase {
 
     private func makePaths(
         directory: URL, runtime: URL, custom: URL,
-        modelOverrides: [String: ModelFieldOverrides] = [:]
+        modelOverrides: [String: ModelFieldOverrides] = [:],
+        codexHome: URL? = nil
     ) -> CatalogPaths {
         CatalogPaths(
             codexRuntime: runtime,
+            codexHome: codexHome ?? directory.appendingPathComponent("isolated-codex-home"),
             customSource: custom,
             mergedCatalog: directory.appendingPathComponent("models.json"),
             syncLog: directory.appendingPathComponent("sync.jsonl"),

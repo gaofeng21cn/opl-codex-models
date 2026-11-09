@@ -5,11 +5,7 @@ public struct ContextManagementSettings: Sendable {
     public let enabled: Bool
     public let provider: String
 
-    public static var configurationURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml")
-    }
-
-    public static func read(from url: URL = configurationURL) throws -> Self {
+    public static func read(from url: URL) throws -> Self {
         let text = FileManager.default.fileExists(atPath: url.path)
             ? try String(contentsOf: url, encoding: .utf8) : ""
         let root = try TOMLTable(string: text)
@@ -23,7 +19,7 @@ public struct ContextManagementSettings: Sendable {
 
     public static func setEnabled(
         _ enabled: Bool,
-        in url: URL = configurationURL,
+        in url: URL,
         backupDirectory: URL
     ) throws {
         let original = FileManager.default.fileExists(atPath: url.path)
