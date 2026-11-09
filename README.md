@@ -108,6 +108,24 @@ Codex 官方模型 ─┐
 
 自定义模型仍以自定义模型源为准，不受此配置影响。暂未出现在官方目录中的模型标识会保留，待以后出现时应用；同步日志中的 `applied_model_overrides` 记录本次生效的字段和值，`inactive_model_overrides` 记录本次未应用的模型标识。无效数值或合并后当前上下文超过最大上下文时，同步会报错并保留原目录。
 
+## Agent 机器入口
+
+macOS App 内置的 `Contents/Helpers/CodexModelSync` 同时提供只读 `read` / `list`、`preview add|remove|reasoning` 和自定义源编辑 `add` / `remove` / `reasoning`（`update` 是推理配置编辑的别名）。省略子命令时保留原来的同步行为；所有命令支持 `--config /absolute/config.json`，`--help` 返回选项说明。
+
+```bash
+CodexModelSync read --json
+CodexModelSync preview remove --slug vendor-model --json
+CodexModelSync remove --slug vendor-model --expected-source-digest <source_digest> --json
+CodexModelSync reasoning --slug vendor-model --efforts low,high,max --default-effort high --expected-source-digest <source_digest> --json
+CodexModelSync sync --json
+```
+
+新增模型沿用界面的模板规则：`add --slug <id> --template <existing-id> --name <name> --description <text>`，可指定 `--context-window`、`--image`、`--original-image-detail` 和推理档位。先使用 `preview add` 检查候选，再传入读取结果的 `source_digest` 执行同一操作。
+
+管理结果使用 `codex_models.cli.v1`，包含来源路径、原文字节的 SHA-256 `source_digest`、自定义模型及已有合并目录的 `catalog_digest` / `catalog_models`。写入必须带当前来源摘要；摘要变化返回 `source_conflict`，不创建备份或覆盖新内容。CLI 与 GUI 共用编辑器、备份和写锁。`preview` 不写文件，`source_saved` 只表示自定义源已保存，`sync_required: true` 表示尚需原同步服务更新 Codex 使用的目录。同步继续返回原有 `updated` / `no_change` 记录。
+
+`--json` 下错误也输出单个 JSON，并以非零码退出。若调用中断或结果未知，先 `read` 核对当前摘要及对象，再决定后续操作；不要盲目重复修改。Agent 可在没有图形界面的环境完成这些步骤；原生 App 仍用于持续管理模型。
+
 ## 从源码构建
 
 构建、测试、开发安装和发行流程见[开发与发行](docs/development.md)。

@@ -34,6 +34,23 @@ python scripts/desktop_entry.py
 
 也可使用 `Start.cmd`。首次运行只创建应用自身的 `user-data`；写入 Codex 配置需在界面预览并应用。已有目录可导入副本、检查差异后写回；未知字段保留，检测到外部修改时拒绝覆盖。
 
+## Agent 管理入口
+
+CLI 的自定义模型源操作复用应用的编辑、校验与备份服务。`list --json` 返回 `codex_models.cli.v1`，包括源/合并目录路径、原字节 SHA-256 的 `source_digest` / `catalog_digest`、合并目录中的 `models` 和源中尚待同步的 `custom_models`。本地读取和编辑不要求 Codex 运行时可执行。
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m codex_model_manager --config config.json list --json
+python -m codex_model_manager --config config.json add vendor-model --template official-model --description "Vendor model" --context-window 128000 --dry-run --json
+python -m codex_model_manager --config config.json add vendor-model --template official-model --description "Vendor model" --context-window 128000 --expected-source-digest <source_digest> --json
+python -m codex_model_manager --config config.json reasoning vendor-model --efforts low,high --default high --expected-source-digest <latest_source_digest> --json
+python -m codex_model_manager --config config.json remove vendor-model --expected-source-digest <latest_source_digest> --json
+```
+
+`add`、`reasoning`、`remove` 的 JSON 写入必须带最近读取的源摘要；GUI/CLI 在同一文件写锁内重读、核对、备份并原子保存。摘要过期返回 `source_conflict`，重新读取和审阅后再决定。`--dry-run` 返回候选和 `proposed_source_digest`，不创建文件或备份。成功保存返回新的 `source_digest`、源模型回读和 `sync_required: true`：源已保存，合并目录还需调用既有 `sync`；不会隐式应用 Codex 配置。
+
+这些命令明确操作 `customSourcePath`。GUI 的接管编辑副本仍使用现有 `takeover-*` / `edit-model` 路径，应用和撤销沿用原来的差异确认与冲突检查。JSON 模式的参数、配置、数据与 I/O 失败均输出结构化 `error`，进程退出码非零。
+
 ## 可选协议桥
 
 桥默认关闭。用户明确启用后才修改选定 provider 的 `base_url`，原值和配置备份保留，可恢复直连。桥仅绑定回环地址，按所选模型转换 Responses 工具协议；不读取 keyring，客户端提供的认证仅在内存中转发。关闭 GUI 不会停止已启用的桥，须使用恢复直连操作。

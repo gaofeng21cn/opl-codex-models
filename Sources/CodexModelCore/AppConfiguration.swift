@@ -174,7 +174,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    private static func resolve(_ rawValue: String, field: String, homeDirectory: URL) throws -> URL {
+    static func resolve(_ rawValue: String, field: String, homeDirectory: URL) throws -> URL {
         let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
             throw CoreError.invalidConfiguration("\(field) 不能为空")

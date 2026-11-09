@@ -1,4 +1,5 @@
 import SwiftUI
+import CodexModelCore
 
 struct AddModelView: View {
     @ObservedObject var store: CatalogStore

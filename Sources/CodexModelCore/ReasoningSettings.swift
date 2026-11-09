@@ -1,34 +1,34 @@
 import Foundation
 
-struct ReasoningSettings: Equatable, Hashable {
-    static let knownEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+public struct ReasoningSettings: Equatable, Hashable {
+    public static let knownEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
-    var supportedEfforts: [String]
-    var defaultEffort: String
+    public var supportedEfforts: [String]
+    public var defaultEffort: String
 
-    init(supportedEfforts: [String] = [], defaultEffort: String = "") {
+    public init(supportedEfforts: [String] = [], defaultEffort: String = "") {
         self.supportedEfforts = supportedEfforts
         self.defaultEffort = defaultEffort
     }
 
-    init(model: [String: Any]) {
+    public init(model: [String: Any]) {
         supportedEfforts = (model["supported_reasoning_levels"] as? [[String: Any]])?
             .compactMap { $0["effort"] as? String } ?? []
         defaultEffort = model["default_reasoning_level"] as? String ?? ""
     }
 
-    var availableEfforts: [String] {
+    public var availableEfforts: [String] {
         Self.knownEfforts + supportedEfforts.filter { !Self.knownEfforts.contains($0) }
     }
 
-    var isValid: Bool {
+    public var isValid: Bool {
         !supportedEfforts.isEmpty
             && supportedEfforts.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             && Set(supportedEfforts).count == supportedEfforts.count
             && supportedEfforts.contains(defaultEffort)
     }
 
-    mutating func setEnabled(_ enabled: Bool, for effort: String) {
+    public mutating func setEnabled(_ enabled: Bool, for effort: String) {
         if enabled, !supportedEfforts.contains(effort) {
             supportedEfforts.append(effort)
             let order = availableEfforts

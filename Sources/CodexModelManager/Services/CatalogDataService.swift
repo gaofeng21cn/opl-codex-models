@@ -29,49 +29,22 @@ struct CatalogDataService {
     }
 
     func addCustomModel(_ draft: NewModelDraft) throws {
-        let sourceData = try Data(contentsOf: paths.customSource)
-        let mergedData = try Data(contentsOf: paths.mergedCatalog)
-        let models = try CatalogParser.parseModels(customData: sourceData, catalogData: mergedData)
-        let updatedData = try CustomModelEditor.adding(
-            draft: draft,
-            to: sourceData,
-            catalogData: mergedData,
-            existingSlugs: Set(models.map(\.slug))
-        )
-
-        try writeCustomSource(updatedData, replacing: sourceData)
+        _ = try CatalogSourceService(paths: paths).edit { source, catalog in
+            try CustomModelEditor.adding(draft: draft, to: source, catalogData: catalog,
+                existingSlugs: CatalogSourceService.slugs(source, catalog))
+        }
     }
 
     func updateReasoning(_ settings: ReasoningSettings, for slug: String) throws {
-        let sourceData = try Data(contentsOf: paths.customSource)
-        let updatedData = try CustomModelEditor.updatingReasoning(settings, for: slug, in: sourceData)
-        try writeCustomSource(updatedData, replacing: sourceData)
+        _ = try CatalogSourceService(paths: paths).edit { source, _ in
+            try CustomModelEditor.updatingReasoning(settings, for: slug, in: source)
+        }
     }
 
     func deleteCustomModel(slug: String) throws {
-        let sourceData = try Data(contentsOf: paths.customSource)
-        let updatedData = try CustomModelEditor.removing(slug: slug, from: sourceData)
-        try writeCustomSource(updatedData, replacing: sourceData)
-    }
-
-    private func writeCustomSource(_ updatedData: Data, replacing sourceData: Data) throws {
-        try FileManager.default.createDirectory(
-            at: paths.backupDirectory,
-            withIntermediateDirectories: true
-        )
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
-        let backup = paths.backupDirectory.appendingPathComponent(
-            "custom-models.\(formatter.string(from: Date())).\(UUID().uuidString).json"
-        )
-        try sourceData.write(to: backup, options: .atomic)
-        try updatedData.write(to: paths.customSource, options: .atomic)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: paths.customSource.path
-        )
+        _ = try CatalogSourceService(paths: paths).edit { source, _ in
+            try CustomModelEditor.removing(slug: slug, from: source)
+        }
     }
 
     func runSync() throws {

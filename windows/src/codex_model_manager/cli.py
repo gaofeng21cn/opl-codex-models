@@ -7,6 +7,7 @@ for management tasks. All child processes go through the argument-array runner.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import sys
@@ -14,11 +15,38 @@ from pathlib import Path
 
 from .core.app_config import AppConfiguration
 from .core.backup import backup_file, restore_file
-from .core.errors import CodexModelError
+from .core.errors import CodexModelError, ConflictError
 from .core.catalog_sync import CatalogSyncService
 from .core.custom_models import NewModelDraft
 from .core.reasoning import ReasoningSettings
 from .services.catalog_data_service import CatalogDataService
+
+CLI_SCHEMA = "codex_models.cli.v1"
+
+
+class CLIArgumentError(ValueError):
+    pass
+
+
+class CLIArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CLIArgumentError(message)
+
+
+def _json_result(operation, **result):
+    print(json.dumps({"schema": CLI_SCHEMA, "operation": operation, **result},
+                     ensure_ascii=False, sort_keys=True))
+
+
+def _edit_options(args):
+    expected = args.expected_source_digest
+    if args.json and not args.dry_run and not expected:
+        raise CodexModelError("JSON 修改需要 --expected-source-digest；先用 list --json 读取。")
+    return {"expected_source_digest": expected, "dry_run": args.dry_run}
+
+
+def _local_service(args):
+    return CatalogDataService(_config(args).resolved_paths())
 
 
 def _config(args) -> AppConfiguration:
@@ -61,8 +89,15 @@ def cmd_sync(args) -> int:
 
 
 def cmd_list(args) -> int:
-    service = CatalogDataService.from_config(_config(args))
+    service = _local_service(args)
     snapshot = service.load_snapshot()
+    if args.json:
+        _json_result("list", status="ok", source_digest=snapshot.source_digest,
+                     catalog_digest=snapshot.catalog_digest,
+                     source_path=service.paths.custom_source, catalog_path=service.paths.merged_catalog,
+                     models=[asdict(m) for m in snapshot.models if m.matches(args.search or "")],
+                     custom_models=snapshot.custom_models)
+        return 0
     for m in snapshot.models:
         if not m.matches(args.search or ""):
             continue
@@ -71,7 +106,8 @@ def cmd_list(args) -> int:
 
 
 def cmd_add(args) -> int:
-    service = CatalogDataService.from_config(_config(args))
+    options = _edit_options(args)
+    service = _local_service(args)
     draft = NewModelDraft(
         slug=args.slug,
         display_name=args.name or args.slug,
@@ -80,17 +116,42 @@ def cmd_add(args) -> int:
         context_window=args.context_window,
         supports_image=args.image,
     )
-    service.add_custom_model(draft)
+    result = service.add_custom_model(draft, **options)
+    if args.json:
+        _json_result("add", **result)
+        return 0
+    if args.dry_run:
+        print(f"只读预览：可新增自定义模型 {args.slug}（未保存）。")
+        return 0
     print(f"已新增自定义模型：{args.slug}")
     return 0
 
 
 def cmd_edit_reasoning(args) -> int:
-    service = CatalogDataService.from_config(_config(args))
+    options = _edit_options(args)
+    service = _local_service(args)
     supported = [e.strip() for e in args.efforts.split(",") if e.strip()]
     settings = ReasoningSettings(supported_efforts=supported, default_effort=args.default)
-    service.update_reasoning(settings, args.slug)
+    result = service.update_reasoning(settings, args.slug, **options)
+    if args.json:
+        _json_result("reasoning", **result)
+        return 0
+    if args.dry_run:
+        print(f"只读预览：可更新模型 {args.slug} 的推理档位（未保存）。")
+        return 0
     print(f"已更新模型 {args.slug} 的推理档位。")
+    return 0
+
+
+def cmd_remove(args) -> int:
+    options = _edit_options(args)
+    result = _local_service(args).remove_custom_model(args.slug, **options)
+    if args.json:
+        _json_result("remove", **result)
+    elif args.dry_run:
+        print(f"只读预览：可删除自定义模型 {args.slug}（未保存）。")
+    else:
+        print(f"已删除自定义模型：{args.slug}")
     return 0
 
 
@@ -654,7 +715,7 @@ def cmd_doctor(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="codex-model-manager", description="Windows Codex 模型管理器")
+    p = CLIArgumentParser(prog="codex-model-manager", description="Windows Codex 模型管理器")
     p.add_argument("--config", help="显式 app 配置文件路径（默认在 LOCALAPPDATA\\CodexModelManager\\config.json）")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -668,7 +729,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("list", help="列出模型")
     s.add_argument("--search", help="按 slug/名称/描述过滤")
+    s.add_argument("--json", action="store_true", help="输出模型与当前源/目录摘要")
     s.set_defaults(func=cmd_list)
+
+    def edit_options(parser):
+        parser.add_argument("--json", action="store_true", help="输出机器可读结果；写入时必须提供源摘要")
+        parser.add_argument("--expected-source-digest", help="list --json 返回的 source_digest")
+        parser.add_argument("--dry-run", action="store_true", help="只读预览候选，不备份、不写入")
 
     s = sub.add_parser("add", help="从模板新增自定义模型")
     s.add_argument("slug")
@@ -677,13 +744,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--template", required=True)
     s.add_argument("--context-window", type=int, required=True)
     s.add_argument("--image", action="store_true")
+    edit_options(s)
     s.set_defaults(func=cmd_add)
 
     s = sub.add_parser("reasoning", help="编辑推理档位")
     s.add_argument("slug")
     s.add_argument("--efforts", required=True, help="支持档位，逗号分隔，如 low,high,max")
     s.add_argument("--default", required=True)
+    edit_options(s)
     s.set_defaults(func=cmd_edit_reasoning)
+
+    s = sub.add_parser("remove", help="删除自定义模型源中的模型（合并目录仍需同步）")
+    s.add_argument("slug")
+    edit_options(s)
+    s.set_defaults(func=cmd_remove)
 
     s = sub.add_parser("backup", help="备份自定义源与合并目录")
     s.add_argument("--backup-dir")
@@ -789,13 +863,32 @@ def main(argv=None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = build_parser()
-    args = parser.parse_args(argv)
+    supplied = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = parser.parse_args(supplied)
+    except CLIArgumentError as exc:
+        if "--json" in supplied:
+            _json_result("parse", status="error", error={"code": "invalid_arguments", "message": str(exc)})
+        else:
+            parser.print_usage(sys.stderr)
+            print(f"错误：{exc}", file=sys.stderr)
+        return 2
     try:
         return args.func(args)
     except CodexModelError as exc:
+        if getattr(args, "json", False):
+            _json_result(args.command, status="error",
+                         error={"code": "source_conflict" if isinstance(exc, ConflictError) else "invalid_request",
+                                "message": str(exc)})
+            return 1
         print(f"错误：{exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # guard: never crash with a traceback for the user
+        if getattr(args, "json", False):
+            _json_result(args.command, status="error",
+                         error={"code": "io_error" if isinstance(exc, OSError) else "invalid_data",
+                                "message": str(exc)})
+            return 2
         print(f"未预期错误：{exc}", file=sys.stderr)
         return 2
 
