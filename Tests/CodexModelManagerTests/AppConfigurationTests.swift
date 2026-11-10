@@ -76,6 +76,65 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try ModelFieldOverrides(contextWindow: 20, maxContextWindow: 10).validate())
     }
 
+    func testDiscoversChatGptEmbeddedCodexRuntime() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runtime = directory
+            .appendingPathComponent("ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        try FileManager.default.createDirectory(
+            at: runtime.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\necho 'codex-cli 0.167.0'\n".utf8).write(to: runtime)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: runtime.path)
+
+        let runtimes = CodexRuntimeLocator.discover(applicationsDirectory: directory)
+
+        XCTAssertTrue(runtimes.contains {
+            $0.url.standardizedFileURL == runtime.standardizedFileURL
+                && $0.version == "codex-cli 0.167.0"
+        })
+    }
+
+    func testLaunchAgentUsesUserPackageManagerPath() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let configuration = AppConfiguration(
+            codexRuntimePath: "/usr/bin/true",
+            customSourcePath: directory.appendingPathComponent("custom.json").path,
+            mergedCatalogPath: directory.appendingPathComponent("models.json").path,
+            syncLogPath: directory.appendingPathComponent("sync.log").path,
+            errorLogPath: directory.appendingPathComponent("error.log").path,
+            launchAgentPlistPath: directory.appendingPathComponent("sync.plist").path,
+            launchAgentLabel: "com.example.model-catalog-sync",
+            backupDirectoryPath: directory.appendingPathComponent("Backups").path
+        )
+        let paths = try configuration.resolved(homeDirectory: directory)
+        let plist = LaunchAgentInstaller.propertyList(
+            paths: paths,
+            helperURL: directory.appendingPathComponent("CodexModelSync"),
+            configurationURL: directory.appendingPathComponent("config.json"),
+            homeDirectory: directory
+        )
+
+        let environment = try XCTUnwrap(plist["EnvironmentVariables"] as? [String: String])
+        XCTAssertEqual(
+            environment["PATH"],
+            [
+                directory.appendingPathComponent(".local/bin").path,
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/sbin",
+                "/sbin"
+            ].joined(separator: ":")
+        )
+    }
+
     private func makeConfiguration(customSourcePath: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
