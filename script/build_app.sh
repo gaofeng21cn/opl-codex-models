@@ -6,8 +6,8 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 configuration="debug"
 output_path="$project_root/dist/CodexModelManager.app"
 signing_identity="-"
-version="0.4.2"
-build_number="6"
+version="0.4.3"
+build_number="043"
 universal=0
 
 while [[ $# -gt 0 ]]; do
