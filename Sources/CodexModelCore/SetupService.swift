@@ -40,7 +40,8 @@ public struct SetupService {
             try LaunchAgentInstaller.install(
                 paths: paths,
                 helperURL: helperURL,
-                configurationURL: configurationURL
+                configurationURL: configurationURL,
+                homeDirectory: homeDirectory
             )
         }
         return SetupResult(paths: paths, syncStatus: syncResult.status)
@@ -120,7 +121,8 @@ public enum LaunchAgentInstaller {
     public static func install(
         paths: CatalogPaths,
         helperURL: URL,
-        configurationURL: URL
+        configurationURL: URL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws {
         let fileManager = FileManager.default
         for directory in [
@@ -134,17 +136,12 @@ public enum LaunchAgentInstaller {
             try Data().write(to: log, options: .atomic)
         }
 
-        let plist: [String: Any] = [
-            "Label": paths.launchAgentLabel,
-            "ProcessType": "Background",
-            "ProgramArguments": [helperURL.path, "--config", configurationURL.path],
-            "RunAtLoad": false,
-            "StandardErrorPath": paths.errorLog.path,
-            "StandardOutPath": paths.syncLog.path,
-            "StartInterval": 86_400,
-            "ThrottleInterval": 60,
-            "WatchPaths": [paths.codexRuntime.path]
-        ]
+        let plist = propertyList(
+            paths: paths,
+            helperURL: helperURL,
+            configurationURL: configurationURL,
+            homeDirectory: homeDirectory
+        )
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist,
             format: .xml,
@@ -166,5 +163,39 @@ public enum LaunchAgentInstaller {
                 detail.isEmpty ? "无法安装每日同步任务，退出码 \(result.exitCode)。" : "无法安装每日同步任务：\(detail)"
             )
         }
+    }
+
+    static func propertyList(
+        paths: CatalogPaths,
+        helperURL: URL,
+        configurationURL: URL,
+        homeDirectory: URL
+    ) -> [String: Any] {
+        let launchPath = [
+            homeDirectory.appendingPathComponent(".local/bin", isDirectory: true).path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ].joined(separator: ":")
+        return [
+            "Label": paths.launchAgentLabel,
+            "ProcessType": "Background",
+            "ProgramArguments": [helperURL.path, "--config", configurationURL.path],
+            "EnvironmentVariables": [
+                // launchd starts agents with only the system PATH. Node-based
+                // Codex entry points cannot resolve `node` without the user's
+                // standard package-manager locations.
+                "PATH": launchPath
+            ],
+            "RunAtLoad": false,
+            "StandardErrorPath": paths.errorLog.path,
+            "StandardOutPath": paths.syncLog.path,
+            "StartInterval": 86_400,
+            "ThrottleInterval": 60,
+            "WatchPaths": [paths.codexRuntime.path]
+        ]
     }
 }

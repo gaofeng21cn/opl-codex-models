@@ -229,10 +229,15 @@ public enum CodexRuntimeLocator {
         discover(fileManager: fileManager).first?.url
     }
 
-    public static func discover(fileManager: FileManager = .default) -> [CodexRuntime] {
+    public static func discover(
+        fileManager: FileManager = .default,
+        applicationsDirectory: URL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+    ) -> [CodexRuntime] {
         let candidates = [
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            applicationsDirectory
+                .appendingPathComponent("ChatGPT.app/Contents/Resources/codex-cli/bin/codex").path,
+            applicationsDirectory.appendingPathComponent("ChatGPT.app/Contents/Resources/codex").path,
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex"
         ]
