@@ -1,0 +1,18 @@
+{
+  "schema_version": "opl.product-release.v1",
+  "product_id": "opl-codex-models",
+  "repository": "gaofeng21cn/opl-codex-models",
+  "strategy": "daily_patch",
+  "trigger": "tag",
+  "tag_prefix": "v",
+  "publisher_workflow": "release.yml",
+  "channel": { "kind": "github_release" },
+  "version_file": { "path": "product-version.json", "kind": "json" },
+  "version_files": [
+    { "path": "product-version.json", "kind": "json" },
+    { "path": "windows/src/codex_model_manager/__init__.py", "kind": "python_version" }
+  ],
+  "release_paths": ["Sources", "Resources", "Package.swift", "Package.resolved", "script", "windows", "product-version.json", ".github/workflows/release.yml"],
+  "prepare": [],
+  "verify": []
+}

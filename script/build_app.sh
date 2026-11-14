@@ -6,8 +6,8 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 configuration="debug"
 output_path="$project_root/dist/CodexModelManager.app"
 signing_identity="-"
-version="0.4.3"
-build_number="043"
+version="$(/usr/bin/plutil -extract version raw -o - "$project_root/product-version.json")"
+build_number="${version//./}"
 universal=0
 
 while [[ $# -gt 0 ]]; do
