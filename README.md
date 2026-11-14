@@ -6,6 +6,10 @@
 
 <p align="center">在 macOS 上查看、同步和维护 Codex 官方模型与自定义模型。</p>
 
+每日发布任务检查主线的交付变化，经 CI 合入版本准备后，使用同一源码 tag 发布
+签名、公证的 macOS 安装包。`product-version.json` 是产品版本来源，Windows 预览
+使用同一产品版本。Homebrew 从已发布安装包生成索引。
+
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-32CD32?style=flat-square&logo=apache&logoColor=white" alt="Apache License 2.0">
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-6C757D?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更高版本">

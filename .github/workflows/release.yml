@@ -1,0 +1,100 @@
+name: Release Codex Models
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: codex-models-release
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify canonical product source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(plutil -extract version raw -o - product-version.json)"
+          test "$GITHUB_REF_NAME" = "v$version"
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          git fetch origin main --quiet
+          git merge-base --is-ancestor HEAD origin/main
+          swift test
+          if gh release view "$GITHUB_REF_NAME" --json tagName > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/existing-release-error"; then
+            echo 'published=true' >> "$GITHUB_OUTPUT"
+          else
+            grep -qi 'not found\|404\|release not found' "$RUNNER_TEMP/existing-release-error"
+            echo 'published=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Configure Apple signing and notarization
+        if: steps.source.outputs.published != 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${BUILD_CERTIFICATE_BASE64:?Missing Developer ID certificate}"
+          : "${P12_PASSWORD:?Missing certificate password}"
+          : "${APPLE_ID:?Missing notarization account}"
+          : "${APPLE_ID_PASSWORD:?Missing notarization credential}"
+          : "${TEAM_ID:?Missing Apple team}"
+          keychain="$RUNNER_TEMP/models-release.keychain-db"
+          password="$(openssl rand -hex 24)"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          xcrun notarytool store-credentials codex-models-release --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$TEAM_ID" --keychain "$keychain"
+          echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+      - name: Build, sign and notarize universal App and DMG
+        if: steps.source.outputs.published != 'true'
+        env:
+          SIGNING_IDENTITY: 'Developer ID Application: FENG GAO (SVVC4TA784)'
+          APPLE_NOTARY_PROFILE: codex-models-release
+        run: script/release.sh "${GITHUB_REF_NAME#v}"
+      - name: Publish and verify the same product version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf 'Codex Models %s\n\nSigned and notarized universal macOS App. Source: %s.\n' "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" > "$RUNNER_TEMP/release-notes.md"
+          if [ -f "$RUNNER_TEMP/existing-release.json" ]; then
+            gh release download "$GITHUB_REF_NAME" --pattern 'Codex-Models.dmg*' --dir dist
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Codex Models ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/release-notes.md" dist/Codex-Models.dmg dist/Codex-Models.dmg.sha256
+          fi
+          (cd dist && shasum -a 256 -c Codex-Models.dmg.sha256)
+          xcrun stapler validate dist/Codex-Models.dmg
+          spctl --assess --type open --context context:primary-signature dist/Codex-Models.dmg
+          gh release view "$GITHUB_REF_NAME" --json tagName,assets > "$RUNNER_TEMP/release.json"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release.json').read_text())
+          assert release['tagName'] == os.environ['GITHUB_REF_NAME']
+          for name in ('Codex-Models.dmg', 'Codex-Models.dmg.sha256'):
+              asset, = [a for a in release['assets'] if a['name'] == name]
+              assert asset['digest'] == 'sha256:' + hashlib.sha256((Path('dist') / name).read_bytes()).hexdigest()
+          PY
+      - name: Remove temporary Apple credentials
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/models-release.keychain-db" || true
