@@ -328,7 +328,7 @@ class CodexModelManagerApp:
         self.root.minsize(1000, 660)
         import sv_ttk
         import tkinter.font as tkfont
-        sv_ttk.set_theme('light')
+        sv_ttk.set_theme('light', self.root)
         for name in tkfont.names(self.root):
             # The theme owns separate fonts for entries, buttons and headings.
             # Configure those too, rather than only ttk's default style.
