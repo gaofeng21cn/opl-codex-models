@@ -185,6 +185,9 @@ public struct CatalogSyncService: Sendable {
     /// home would resolve `model_catalog_json` to our own merged catalog and echo custom models
     /// back as official ones. If refresh is unavailable, fall back to the bundled list.
     private func readOfficialCatalog() throws -> OfficialCatalog {
+        if paths.useBundledCatalog {
+            return try readBundledOfficialCatalog()
+        }
         if let reason = fileCredentialFallbackReason() {
             return try readBundledOfficialCatalog(fallbackReason: reason)
         }
@@ -236,7 +239,7 @@ public struct CatalogSyncService: Sendable {
         return OfficialCatalog(output: result.standardOutput, source: "refresh")
     }
 
-    private func readBundledOfficialCatalog(fallbackReason: String) throws -> OfficialCatalog {
+    private func readBundledOfficialCatalog(fallbackReason: String? = nil) throws -> OfficialCatalog {
         let isolatedCodexHome = FileManager.default.temporaryDirectory.appendingPathComponent(
             "codex-model-manager-\(UUID().uuidString)",
             isDirectory: true

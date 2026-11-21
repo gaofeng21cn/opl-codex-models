@@ -124,6 +124,10 @@ final class CatalogSyncServiceTests: XCTestCase {
         fi
         case " $* " in
           *" --bundled "*)
+            if [ -e "$CODEX_HOME/auth.json" ]; then
+              echo "bundled query received account credentials" >&2
+              exit 23
+            fi
             echo '{"models":[{"slug":"gpt-bundled","priority":1,"context_window":1000,"max_context_window":1000,"input_modalities":["text"]}]}'
             ;;
           *)
@@ -150,6 +154,29 @@ final class CatalogSyncServiceTests: XCTestCase {
         XCTAssertEqual(refreshedRecord["official_source"] as? String, "refresh")
         var slugs = try readSlugs(paths)
         XCTAssertEqual(slugs, ["gpt-bundled", "gpt-new-sol"])
+
+        // A successful account refresh must not replace an explicitly selected bundled catalog.
+        let configuration = AppConfiguration(
+            codexRuntimePath: runtime.path,
+            customSourcePath: custom.path,
+            mergedCatalogPath: paths.mergedCatalog.path,
+            syncLogPath: paths.syncLog.path,
+            errorLogPath: paths.errorLog.path,
+            launchAgentPlistPath: paths.launchAgentPlist.path,
+            launchAgentLabel: paths.launchAgentLabel,
+            backupDirectoryPath: paths.backupDirectory.path,
+            codexHomePath: paths.codexHome.path,
+            useBundledCatalog: true
+        )
+        let settings = directory.appendingPathComponent("settings.json")
+        try ConfigurationDraft(configuration: configuration).configuration.save(to: settings)
+        let bundledPaths = try AppConfiguration.load(from: settings, homeDirectory: home)
+        let selected = try CatalogSyncService(paths: bundledPaths).sync()
+        let selectedRecord = try JSONSerialization.jsonObject(with: selected.recordData) as! [String: Any]
+        XCTAssertEqual(selectedRecord["official_source"] as? String, "bundled")
+        XCTAssertNil(selectedRecord["official_fallback_reason"] as? String)
+        XCTAssertEqual(try readSlugs(bundledPaths), ["gpt-bundled"])
+        XCTAssertEqual(try CatalogSyncService(paths: bundledPaths).sync().status, "no_change")
 
         try FileManager.default.removeItem(at: home.appendingPathComponent(".codex/auth.json"))
         let bundled = try CatalogSyncService(paths: paths).sync()

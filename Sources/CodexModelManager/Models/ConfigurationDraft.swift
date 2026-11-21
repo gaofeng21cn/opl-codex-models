@@ -13,6 +13,7 @@ struct ConfigurationDraft: Equatable {
     var backupDirectoryPath = ""
     var visibilityOverrides: [String: ModelVisibility] = [:]
     var modelOverrides: [String: ModelFieldOverrides] = [:]
+    var useBundledCatalog: Bool?
 
     init() {}
 
@@ -28,6 +29,7 @@ struct ConfigurationDraft: Equatable {
         backupDirectoryPath = configuration.backupDirectoryPath
         visibilityOverrides = configuration.visibilityOverrides ?? [:]
         modelOverrides = configuration.modelOverrides ?? [:]
+        useBundledCatalog = configuration.useBundledCatalog
     }
 
     var configuration: AppConfiguration {
@@ -42,7 +44,8 @@ struct ConfigurationDraft: Equatable {
             backupDirectoryPath: backupDirectoryPath,
             visibilityOverrides: visibilityOverrides,
             modelOverrides: modelOverrides,
-            codexHomePath: codexHomePath.isEmpty ? nil : codexHomePath
+            codexHomePath: codexHomePath.isEmpty ? nil : codexHomePath,
+            useBundledCatalog: useBundledCatalog
         )
     }
 

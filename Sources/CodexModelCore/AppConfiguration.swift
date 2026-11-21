@@ -13,6 +13,7 @@ public struct CatalogPaths: Equatable, Sendable {
     public let backupDirectory: URL
     public let visibilityOverrides: [String: ModelVisibility]
     public let modelOverrides: [String: ModelFieldOverrides]
+    public let useBundledCatalog: Bool
 
     public init(
         codexRuntime: URL,
@@ -25,7 +26,8 @@ public struct CatalogPaths: Equatable, Sendable {
         launchAgentLabel: String,
         backupDirectory: URL,
         visibilityOverrides: [String: ModelVisibility] = [:],
-        modelOverrides: [String: ModelFieldOverrides] = [:]
+        modelOverrides: [String: ModelFieldOverrides] = [:],
+        useBundledCatalog: Bool = false
     ) {
         self.codexRuntime = codexRuntime
         self.codexHome = codexHome
@@ -38,6 +40,7 @@ public struct CatalogPaths: Equatable, Sendable {
         self.backupDirectory = backupDirectory
         self.visibilityOverrides = visibilityOverrides
         self.modelOverrides = modelOverrides
+        self.useBundledCatalog = useBundledCatalog
     }
 }
 
@@ -53,6 +56,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var backupDirectoryPath: String
     public var visibilityOverrides: [String: ModelVisibility]?
     public var modelOverrides: [String: ModelFieldOverrides]?
+    public var useBundledCatalog: Bool?
 
     public init(
         codexRuntimePath: String?,
@@ -65,7 +69,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         backupDirectoryPath: String,
         visibilityOverrides: [String: ModelVisibility]? = nil,
         modelOverrides: [String: ModelFieldOverrides]? = nil,
-        codexHomePath: String? = nil
+        codexHomePath: String? = nil,
+        useBundledCatalog: Bool? = nil
     ) {
         self.codexRuntimePath = codexRuntimePath
         self.codexHomePath = codexHomePath
@@ -78,6 +83,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         self.backupDirectoryPath = backupDirectoryPath
         self.visibilityOverrides = visibilityOverrides
         self.modelOverrides = modelOverrides
+        self.useBundledCatalog = useBundledCatalog
     }
 
     public static var defaultURL: URL {
@@ -178,7 +184,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
                 homeDirectory: homeDirectory
             ),
             visibilityOverrides: visibilityOverrides ?? [:],
-            modelOverrides: modelOverrides ?? [:]
+            modelOverrides: modelOverrides ?? [:],
+            useBundledCatalog: useBundledCatalog ?? false
         )
     }
 
