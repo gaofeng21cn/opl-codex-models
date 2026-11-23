@@ -11,12 +11,11 @@ These tests need no Codex runtime: the takeover only touches model catalog JSON.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from conftest import run_cli_inprocess
 
 from codex_model_manager.core import takeover
 from codex_model_manager.core.app_config import AppConfiguration
@@ -458,41 +457,30 @@ def test_update_model_rejects_bad_input(tmp_path):
 # CLI end-to-end (no Codex runtime involved)
 # ---------------------------------------------------------------------------
 
-def _run_cli(config_url: Path, *argv):
-    repo = Path(__file__).resolve().parent.parent
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(repo / "src")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(
-        [sys.executable, "-m", "codex_model_manager", "--config", str(config_url), *argv],
-        capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(repo))
-    return proc.returncode, proc.stdout, proc.stderr
-
-
 def test_cli_takeover_flow(tmp_path):
     cfg, cfg_url, active_path, _s = _sandbox(tmp_path)
     original = active_path.read_bytes()
 
-    rc, out, err = _run_cli(cfg_url, "takeover-import")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-import")
     assert rc == 0, err
     assert "生效配置引用目录" in out and "待应用目录" in out
 
-    rc, out, err = _run_cli(cfg_url, "edit-model", "gpt-6-astra",
+    rc, out, err = run_cli_inprocess(cfg_url, "edit-model", "gpt-6-astra",
                             "--context-window", "262144", "--max-context-window", "262144")
     assert rc == 0, err
     assert active_path.read_bytes() == original   # editing the pending copy only
 
-    rc, out, err = _run_cli(cfg_url, "takeover-diff")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-diff")
     assert rc == 0, err
     assert "修改 1" in out and "context_window: 128000 -> 262144" in out
     assert active_path.read_bytes() == original
 
-    rc, out, err = _run_cli(cfg_url, "takeover-apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-apply")
     assert rc == 0, err
     written = json.loads(active_path.read_text(encoding="utf-8"))
     assert written["models"][0]["context_window"] == 262144
 
-    rc, out, err = _run_cli(cfg_url, "takeover-undo")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-undo")
     assert rc == 0, err
     assert active_path.read_bytes() == original
 
@@ -500,7 +488,7 @@ def test_cli_takeover_flow(tmp_path):
 def test_cli_takeover_apply_refuses_removal_without_confirm(tmp_path):
     cfg, cfg_url, active_path, _s = _sandbox(tmp_path)
     original = active_path.read_bytes()
-    rc, _out, err = _run_cli(cfg_url, "takeover-import")
+    rc, _out, err = run_cli_inprocess(cfg_url, "takeover-import")
     assert rc == 0, err
 
     # Drop one model from the pending copy, as a user edit would.
@@ -509,12 +497,12 @@ def test_cli_takeover_apply_refuses_removal_without_confirm(tmp_path):
     pending["models"] = [m for m in pending["models"] if m["slug"] != "deepseek-v4.1-flash"]
     pending_path.write_text(json.dumps(pending, ensure_ascii=False), encoding="utf-8")
 
-    rc, out, err = _run_cli(cfg_url, "takeover-apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-apply")
     assert rc != 0
     assert "deepseek-v4.1-flash" in out + err
     assert active_path.read_bytes() == original
 
-    rc, out, err = _run_cli(cfg_url, "takeover-apply", "--confirm-removals")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-apply", "--confirm-removals")
     assert rc == 0, err
     written = json.loads(active_path.read_text(encoding="utf-8"))
     assert [m["slug"] for m in written["models"]] == ["gpt-6-astra"]
@@ -523,7 +511,7 @@ def test_cli_takeover_apply_refuses_removal_without_confirm(tmp_path):
 def test_cli_takeover_apply_is_readonly_without_import(tmp_path):
     cfg, cfg_url, active_path, _s = _sandbox(tmp_path)
     before = active_path.read_bytes()
-    rc, out, err = _run_cli(cfg_url, "takeover-apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-apply")
     assert rc != 0
     assert "未写入" in out + err
     assert active_path.read_bytes() == before
@@ -536,14 +524,14 @@ def test_cli_explicit_active_is_the_file_actually_written(tmp_path):
     explicit_active.write_text(json.dumps(ACTIVE, ensure_ascii=False), encoding="utf-8")
     configured_before = configured_active.read_bytes()
 
-    rc, out, err = _run_cli(
+    rc, out, err = run_cli_inprocess(
         cfg_url, "takeover-import", "--active", str(explicit_active))
     assert rc == 0, out + err
-    rc, out, err = _run_cli(
+    rc, out, err = run_cli_inprocess(
         cfg_url, "edit-model", "gpt-6-astra",
         "--context-window", "262144", "--max-context-window", "262144")
     assert rc == 0, out + err
-    rc, out, err = _run_cli(
+    rc, out, err = run_cli_inprocess(
         cfg_url, "takeover-apply", "--active", str(explicit_active))
     assert rc == 0, out + err
 
@@ -559,9 +547,9 @@ def test_cli_apply_refuses_a_different_target_than_was_imported(tmp_path):
     configured_before = configured_active.read_bytes()
     imported_before = imported_active.read_bytes()
 
-    assert _run_cli(
+    assert run_cli_inprocess(
         cfg_url, "takeover-import", "--active", str(imported_active))[0] == 0
-    rc, out, err = _run_cli(cfg_url, "takeover-apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "takeover-apply")
     assert rc != 0
     assert "不是同一个文件" in out + err
     assert configured_active.read_bytes() == configured_before
@@ -576,7 +564,7 @@ def test_cli_edit_model_rejects_arbitrary_catalog_path(tmp_path):
     outside.write_text(json.dumps(ACTIVE, ensure_ascii=False), encoding="utf-8")
     before = outside.read_bytes()
 
-    rc, out, err = _run_cli(
+    rc, out, err = run_cli_inprocess(
         cfg_url, "edit-model", "gpt-6-astra", "--catalog", str(outside),
         "--context-window", "262144", "--max-context-window", "262144")
     assert rc != 0

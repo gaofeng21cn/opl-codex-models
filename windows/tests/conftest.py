@@ -7,12 +7,58 @@ Windows without any shell-string concatenation.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+
+_CLI_LOCK = threading.Lock()
+
+
+def run_cli_inprocess(config_path: Path | str | None, *argv: str) -> tuple[int, str, str]:
+    """Run ``codex_model_manager.cli.main`` in-process and return (rc, stdout, stderr)."""
+    from codex_model_manager.cli import main as cli_main
+
+    cli_argv = (
+        ["--config", str(config_path), *argv]
+        if config_path is not None
+        else list(argv)
+    )
+    with _CLI_LOCK:
+        prev_argv = sys.argv[:]
+        prev_env = os.environ.copy()
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        rc = 0
+        try:
+            sys.argv = ["codex_model_manager", *cli_argv]
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                try:
+                    result = cli_main(cli_argv)
+                    rc = 0 if result is None else int(result)
+                except SystemExit as exc:
+                    code = exc.code
+                    if code is None:
+                        rc = 0
+                    elif isinstance(code, int):
+                        rc = code
+                    else:
+                        if code:
+                            stderr_buf.write(f"{code}\n")
+                        rc = 1
+        finally:
+            sys.argv = prev_argv
+            for key in set(os.environ) - set(prev_env):
+                del os.environ[key]
+            for key, value in prev_env.items():
+                if os.environ.get(key) != value:
+                    os.environ[key] = value
+        return rc, stdout_buf.getvalue(), stderr_buf.getvalue()
 
 MOCK = Path(__file__).resolve().parent.parent / "demo" / "mock"
 

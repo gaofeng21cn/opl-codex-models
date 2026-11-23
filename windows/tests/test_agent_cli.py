@@ -3,13 +3,11 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
+from conftest import run_cli_inprocess
 from codex_model_manager.core.app_config import AppConfiguration
 
 
@@ -33,14 +31,9 @@ def catalog(tmp_path):
 
 
 def run(catalog, *arguments):
-    source_root = str(Path(__file__).parents[1] / "src")
-    completed = subprocess.run(
-        [sys.executable, "-m", "codex_model_manager", "--config", str(catalog[0]), *arguments],
-        env={**os.environ, "PYTHONPATH": source_root}, capture_output=True, text=True,
-        encoding="utf-8",  # The CLI stream contract is UTF-8, including on ANSI Windows hosts.
-    )
-    assert not completed.stderr, completed.stderr
-    return completed.returncode, json.loads(completed.stdout)
+    returncode, stdout, stderr = run_cli_inprocess(catalog[0], *arguments)
+    assert not stderr, stderr
+    return returncode, json.loads(stdout)
 
 
 def test_read_preview_edit_and_readback_without_runtime(catalog):

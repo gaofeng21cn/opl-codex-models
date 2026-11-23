@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import run_cli_inprocess
 from codex_model_manager.cli import main
 from codex_model_manager.core.app_config import AppConfiguration
 from codex_model_manager.core.backup import classify_backup
@@ -88,19 +89,6 @@ def _build_config(tmp_path: Path, runtime: Path, merged: Path, custom: Path, cod
     return cfg_url
 
 
-def _run_cli(config_url: Path, *argv):
-    """Run the cli main() and capture stdout to a StringIO via capsys pattern."""
-    code, out, err = 0, "", ""
-    # use subprocess to be closer to real CLI behaviour and capture streams
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(
-        [sys.executable, "-m", "codex_model_manager", "--config", str(config_url), *argv],
-        capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(Path(__file__).resolve().parent.parent))
-    return proc.returncode, proc.stdout, proc.stderr
-
-
 def test_apply_diff_is_strictly_readonly(tmp_path):
     """--diff / --dry-run must NOT write config, create backup, or create dirs."""
     runtime = _make_runtime(tmp_path)
@@ -113,7 +101,7 @@ def test_apply_diff_is_strictly_readonly(tmp_path):
     _write(tmp_path / "bundled.json", json.dumps(BUNDLED))
 
     # produce a merged catalog via sync
-    rc, out, err = _run_cli(cfg, "sync")
+    rc, out, err = run_cli_inprocess(cfg, "sync")
     assert rc == 0, err
     assert merged.exists()
 
@@ -128,7 +116,7 @@ def test_apply_diff_is_strictly_readonly(tmp_path):
 
     for flag in ("--diff", "--dry-run", "--diff", "--dry-run"):
         args = ("--codex-config", str(sentinel)) if flag == "--codex-config" else []
-        rc, out, err = _run_cli(cfg, "apply", flag, "--codex-config", str(sentinel))
+        rc, out, err = run_cli_inprocess(cfg, "apply", flag, "--codex-config", str(sentinel))
         assert rc == 0, err
         # caught by command construction: we run effectively --diff --dry-run both
         assert "未写入" in out or "只读预览" in out
@@ -149,13 +137,13 @@ def test_apply_readonly_does_not_write_even_with_merged(tmp_path):
     _ = tmp_path / "bundled.json"
     _write(tmp_path / "bundled.json", json.dumps(BUNDLED))
     os.environ["MOCK_BUNDLED_JSON"] = str(tmp_path / "bundled.json")
-    rc, out, err = _run_cli(cfg, "sync")
+    rc, out, err = run_cli_inprocess(cfg, "sync")
     assert rc == 0, err
 
     sentinel = tmp_path / "real_home" / "config.toml"
     _write(sentinel, 'model = "gpt-5"\n')   # different model_catalog_json (absent)
     before = sentinel.read_bytes()
-    rc, out, err = _run_cli(cfg, "apply", "--diff", "--codex-config", str(sentinel))
+    rc, out, err = run_cli_inprocess(cfg, "apply", "--diff", "--codex-config", str(sentinel))
     assert rc == 0, err
     # nothing written, no model_catalog_json added, backup dir not created as side effect
     assert sentinel.read_bytes() == before
@@ -170,7 +158,7 @@ def test_apply_requires_codex_config_path_never_derives_from_env(tmp_path):
     _write(custom, json.dumps(CUSTOM))
     _write(tmp_path / "bundled.json", json.dumps(BUNDLED))
     os.environ["MOCK_BUNDLED_JSON"] = str(tmp_path / "bundled.json")
-    _run_cli(cfg, "sync")
+    run_cli_inprocess(cfg, "sync")
 
     # Point config at a cfg with NO codexConfigPath and NO --codex-config, and set
     # CODEX_HOME to a temp dir; apply must refuse rather than derive from env.
@@ -185,7 +173,7 @@ def test_apply_requires_codex_config_path_never_derives_from_env(tmp_path):
         codex_config_path=None,
     ).save(str(cfg2))
     os.environ["CODEX_HOME"] = str(tmp_path / "fake_home")
-    rc, out, err = _run_cli(cfg2, "apply")
+    rc, out, err = run_cli_inprocess(cfg2, "apply")
     assert rc != 0
     assert "codexConfigPath" in err
 
@@ -200,10 +188,10 @@ def test_apply_target_uses_config_path(tmp_path):
     _write(custom, json.dumps(CUSTOM))
     _write(tmp_path / "bundled.json", json.dumps(BUNDLED))
     os.environ["MOCK_BUNDLED_JSON"] = str(tmp_path / "bundled.json")
-    rc, out, err = _run_cli(cfg, "sync")
+    rc, out, err = run_cli_inprocess(cfg, "sync")
     assert rc == 0, err
 
-    rc, out, err = _run_cli(cfg, "apply", "--dry-run")  # reads target from config
+    rc, out, err = run_cli_inprocess(cfg, "apply", "--dry-run")  # reads target from config
     assert rc == 0, err
     assert "model_catalog_json" in out
 
@@ -246,12 +234,12 @@ def test_apply_output_leaks_no_secret(tmp_path):
     _write(custom, json.dumps(CUSTOM))
     _write(tmp_path / "bundled.json", json.dumps(BUNDLED))
     os.environ["MOCK_BUNDLED_JSON"] = str(tmp_path / "bundled.json")
-    _run_cli(cfg, "sync")
+    run_cli_inprocess(cfg, "sync")
 
     sentinel = tmp_path / "real_home" / "config.toml"
     _write(sentinel,
         f'api_key = "{SECRET}"\nmodel = "gpt-5"\n')
-    rc, out, err = _run_cli(cfg, "apply", "--diff", "--codex-config", str(sentinel))
+    rc, out, err = run_cli_inprocess(cfg, "apply", "--diff", "--codex-config", str(sentinel))
     assert rc == 0, err
     combined = out + err
     assert SECRET not in combined
@@ -375,7 +363,7 @@ def test_restore_config_backup_rejected_for_model_target(tmp_path):
     assert classify_backup(str(config_bak)) == "toplevel_config"
 
     merged_before = merged.read_bytes()
-    rc, out, err = _run_cli(cfg_url, "restore", str(config_bak), "--target", "merged")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(config_bak), "--target", "merged")
     assert rc != 0
     assert "数据类型不匹配" in err or "已拒绝" in err
     # target untouched, and a backup of the original target is NOT created
@@ -391,7 +379,7 @@ def test_restore_mismatch_refused_unknown_backup(tmp_path):
     assert classify_backup(str(bad)) == "unknown"
 
     merged_before = merged.read_bytes()
-    rc, out, err = _run_cli(cfg_url, "restore", str(bad), "--target", "merged")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(bad), "--target", "merged")
     assert rc != 0
     assert "无法识别" in err
     assert merged.read_bytes() == merged_before
@@ -406,7 +394,7 @@ def test_restore_custom_backup_to_custom_target_succeeds(tmp_path):
     assert classify_backup(str(backup)) == "model_catalog_json"
 
     custom_before = custom.read_bytes()
-    rc, out, err = _run_cli(cfg_url, "restore", str(backup), "--target", "custom")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(backup), "--target", "custom")
     assert rc == 0, err
     assert custom.read_text(encoding="utf-8") == payload
     # a backup of the previous custom file exists before overwrite. The custom
@@ -519,7 +507,7 @@ def _apply_cfg(tmp_path, target, is_demo, runtime=None, merge_dir=None, monkeypa
     cfg_url = tmp_path / "config.json"
     cfg.save(str(cfg_url))
     if do_sync:
-        rc, out, err = _run_cli(cfg_url, "sync")
+        rc, out, err = run_cli_inprocess(cfg_url, "sync")
         assert rc == 0, err
     elif merged_content is not None:
         _write(merged, merged_content)
@@ -537,7 +525,7 @@ def test_apply_nonexistent_runtime_rejected_bytes_unchanged(tmp_path, monkeypatc
         tmp_path, target, is_demo=False,
         runtime=tmp_path / "DOES_NOT_EXIST.exe", monkeypatch=monkeypatch,
         do_sync=False)
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc != 0
     assert "不可执行" in err + out or "不存在" in err + out
     assert target.read_bytes() == before
@@ -548,7 +536,7 @@ def test_apply_real_mode_unverified_refused(tmp_path, monkeypatch):
     _write(target, 'model = "gpt-5"\n')
     before = target.read_bytes()
     cfg_url, merged = _apply_cfg(tmp_path, target, is_demo=False, monkeypatch=monkeypatch)
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc != 0
     assert "未验证" in out + err
     assert target.read_bytes() == before
@@ -561,7 +549,7 @@ def test_apply_invalid_catalog_refused(tmp_path, monkeypatch):
     # merged_catalog exists but is not {"models": [...]} -> structural gate rejects
     cfg_url, merged = _apply_cfg(tmp_path, target, is_demo=False, monkeypatch=monkeypatch)
     merged.write_text("this is not json", encoding="utf-8")
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc != 0
     assert target.read_bytes() == before
 
@@ -574,7 +562,7 @@ def test_apply_demo_out_of_sandbox_refused(tmp_path, monkeypatch):
     before = outside.read_bytes()
     cfg_url, merged = _apply_cfg(tmp_path, outside, is_demo=True,
                                  merge_dir=sandbox, monkeypatch=monkeypatch)
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc != 0
     assert "越界" in out + err or "沙箱" in out + err
     assert outside.read_bytes() == before
@@ -587,7 +575,7 @@ def test_apply_demo_insandbox_allowed(tmp_path, monkeypatch):
     _write(target, 'model = "gpt-5"\n')
     cfg_url, merged = _apply_cfg(tmp_path, target, is_demo=True,
                                  merge_dir=sandbox, monkeypatch=monkeypatch)
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc == 0, err
     assert "model_catalog_json" in target.read_text(encoding="utf-8")
 
@@ -691,7 +679,7 @@ def test_apply_demo_dotdot_escape_refused(tmp_path, monkeypatch):
         monkeypatch=monkeypatch, do_sync=False, merged_content=json.dumps(BUNDLED))
 
     dotdot = str(sandbox / ".." / "outside.toml")
-    rc, out, err = _run_cli(cfg_url, "apply", "--codex-config", dotdot)
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--codex-config", dotdot)
     assert rc != 0
     assert ("越界" in out + err) or ("沙箱" in out + err)
     assert outside.read_bytes() == before
@@ -707,7 +695,7 @@ def test_apply_demo_directory_target_refused(tmp_path, monkeypatch):
         tmp_path, target_dir, is_demo=True, merge_dir=sandbox,
         monkeypatch=monkeypatch, do_sync=False, merged_content=json.dumps(BUNDLED))
 
-    rc, out, err = _run_cli(cfg_url, "apply", "--codex-config", str(target_dir))
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--codex-config", str(target_dir))
     assert rc != 0
     assert "目录" in out + err
 
@@ -725,7 +713,7 @@ def test_apply_demo_sibling_prefix_outside_refused(tmp_path, monkeypatch):
         tmp_path, target, is_demo=True, merge_dir=sandbox,
         monkeypatch=monkeypatch, do_sync=False, merged_content=json.dumps(BUNDLED))
 
-    rc, out, err = _run_cli(cfg_url, "apply", "--codex-config", str(target))
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--codex-config", str(target))
     assert rc != 0
     assert ("越界" in out + err) or ("沙箱" in out + err)
     assert target.read_bytes() == before
@@ -757,7 +745,7 @@ def test_apply_demo_symlink_escape_refused(tmp_path, monkeypatch):
         tmp_path, target, is_demo=True, merge_dir=sandbox,
         monkeypatch=monkeypatch, do_sync=False, merged_content=json.dumps(BUNDLED))
 
-    rc, out, err = _run_cli(cfg_url, "apply", "--codex-config", str(link))
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--codex-config", str(link))
     assert rc != 0
     assert ("越界" in out + err) or ("沙箱" in out + err)
     assert target.read_bytes() == before
@@ -789,7 +777,7 @@ def test_apply_demo_junction_escape_refused(tmp_path, monkeypatch):
         tmp_path, target, is_demo=True, merge_dir=sandbox,
         monkeypatch=monkeypatch, do_sync=False, merged_content=json.dumps(BUNDLED))
 
-    rc, out, err = _run_cli(
+    rc, out, err = run_cli_inprocess(
         cfg_url, "apply", "--codex-config", str(junction / "config.toml"))
     assert rc != 0
     assert ("越界" in out + err) or ("沙箱" in out + err)
@@ -829,7 +817,7 @@ def test_apply_invalid_merged_catalog_refused(tmp_path, monkeypatch, models):
         monkeypatch=monkeypatch, do_sync=False,
         merged_content=json.dumps({"models": models}))
 
-    rc, out, err = _run_cli(cfg_url, "apply", "--codex-config", str(target))
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--codex-config", str(target))
     assert rc != 0
     assert ("结构非法" in out + err) or ("目录无效" in out + err)
     assert target.read_bytes() == before
@@ -856,7 +844,7 @@ def test_restore_invalid_model_backup_rejected(tmp_path):
     cfg_url = tmp_path / "config.json"
     cfg.save(str(cfg_url))
 
-    rc, out, err = _run_cli(cfg_url, "restore", str(backup), "--target", "merged")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(backup), "--target", "merged")
     assert rc != 0
     assert ("结构无效" in err + out) or ("拒绝恢复" in err + out)
     assert merged.read_bytes() == before
@@ -883,7 +871,7 @@ def test_restore_empty_custom_backup_succeeds(tmp_path):
     cfg_url = tmp_path / "config.json"
     cfg.save(str(cfg_url))
 
-    rc, out, err = _run_cli(cfg_url, "restore", str(backup), "--target", "custom")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(backup), "--target", "custom")
     assert rc == 0, err
     restored = json.loads(custom.read_text(encoding="utf-8"))
     assert restored["models"] == []
@@ -912,7 +900,7 @@ def test_restore_empty_merged_backup_refused(tmp_path):
     cfg_url = tmp_path / "config.json"
     cfg.save(str(cfg_url))
 
-    rc, out, err = _run_cli(cfg_url, "restore", str(backup), "--target", "merged")
+    rc, out, err = run_cli_inprocess(cfg_url, "restore", str(backup), "--target", "merged")
     assert rc != 0
     assert ("结构无效" in err + out) or ("拒绝恢复" in err + out)
     assert merged.read_bytes() == before
@@ -934,7 +922,7 @@ def test_apply_diff_offline_without_runtime(tmp_path, monkeypatch):
         runtime=tmp_path / "DOES_NOT_EXIST.exe", monkeypatch=monkeypatch,
         do_sync=False, merged_content=json.dumps(BUNDLED))
 
-    rc, out, err = _run_cli(cfg_url, "apply", "--diff")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply", "--diff")
     assert rc == 0, err
     assert "model_catalog_json" in out
     assert target.read_text(encoding="utf-8") == 'model = "gpt-5"\n'

@@ -36,20 +36,19 @@ B 只修改本次请求的副本：移除精确匹配的、仅包含旧“没有
 
 ```bash
 # A：只做协议兼容
-python scripts/bridge_l2_serve.py --upstream https://YOUR-RELAY \
-  --only-model gpt-6-astra --protocol function --record /tmp/tool-trial.jsonl
+PYTHONPATH=src python -m codex_model_manager --config APP_CONFIG bridge start \
+  --upstream https://YOUR-RELAY --only-model gpt-6-astra --protocol function --record /tmp/tool-trial.jsonl
 
 # B：保留原工具协议，只做上下文纠偏
-python scripts/bridge_l2_serve.py --upstream https://YOUR-RELAY \
-  --only-model gpt-6-astra --protocol native --context-recovery --record /tmp/tool-trial.jsonl
+PYTHONPATH=src python -m codex_model_manager --config APP_CONFIG bridge start \
+  --upstream https://YOUR-RELAY --only-model gpt-6-astra --protocol native --context-recovery --record /tmp/tool-trial.jsonl
 
 # AB：同时启用
-python scripts/bridge_l2_serve.py --upstream https://YOUR-RELAY \
-  --only-model gpt-6-astra --protocol function --context-recovery --record /tmp/tool-trial.jsonl
+PYTHONPATH=src python -m codex_model_manager --config APP_CONFIG bridge start \
+  --upstream https://YOUR-RELAY --only-model gpt-6-astra --protocol function --context-recovery --record /tmp/tool-trial.jsonl
 ```
 
-`python -m codex_model_manager --config APP_CONFIG bridge start` 也支持上述三个选项，
-以及 `--experiment-mode-file PATH`。模式文件只能是 `{"mode":"off"}`（或其他三种
+上述命令也支持 `--experiment-mode-file PATH`。模式文件只能是 `{"mode":"off"}`（或其他三种
 模式），每个请求开始时读取一次。使用临时文件 + 原子替换修改它；等当前回合完成
 再切换。模式文件无效会拒绝请求，不会悄悄切成另一种补丁。补丁按确切模型名生效。
 

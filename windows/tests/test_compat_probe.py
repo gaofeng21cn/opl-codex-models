@@ -14,12 +14,12 @@ Covers the w4-w7 functionality:
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from conftest import run_cli_inprocess
 
 from codex_model_manager.core.app_config import AppConfiguration
 from codex_model_manager.core.compat_probe import (
@@ -91,17 +91,6 @@ def _build_config(tmp_path: Path, runtime: Path, merged: Path, custom: Path,
     cfg_url = tmp_path / "config.json"
     cfg.save(str(cfg_url))
     return cfg_url
-
-
-def _run_cli(config_url: Path, *argv):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(
-        [sys.executable, "-m", "codex_model_manager", "--config", str(config_url), *argv],
-        capture_output=True, text=True, encoding="utf-8", env=env,
-        cwd=str(Path(__file__).resolve().parent.parent))
-    return proc.returncode, proc.stdout, proc.stderr
 
 
 # ---- probe_compatibility: behaviour proof against mock ----
@@ -233,7 +222,7 @@ def test_cli_probe_verify_stores_evidence(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc == 0, err
     assert "通过" in out
     assert "已存储脱敏证据" in out
@@ -257,7 +246,7 @@ def test_cli_probe_verify_fails_for_broken_runtime(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc != 0
     assert "失败" in out + err or "无法" in out + err
 
@@ -280,15 +269,15 @@ def test_cli_apply_succeeds_after_verify(tmp_path, monkeypatch):
     _write(custom, json.dumps(CUSTOM))
 
     # sync to produce a merged catalog
-    rc, out, err = _run_cli(cfg_url, "sync")
+    rc, out, err = run_cli_inprocess(cfg_url, "sync")
     assert rc == 0, err
 
     # verify to store evidence
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc == 0, err
 
     # apply should now succeed (evidence is valid)
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc == 0, err
     assert "已备份原 config 并写入" in out
     text = codex_config.read_text(encoding="utf-8")
@@ -318,12 +307,12 @@ def test_cli_apply_refused_with_stale_evidence(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "sync")
+    rc, out, err = run_cli_inprocess(cfg_url, "sync")
     assert rc == 0, err
 
     # Store evidence, then change the runtime path to invalidate it.
     # Use a second mock runtime that EXISTS but differs (path/SHA mismatch).
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc == 0, err
     runtime2 = tmp_path / "codex2.cmd"
     runtime2.write_text(runtime.read_text(encoding="utf-8"), encoding="utf-8")
@@ -331,7 +320,7 @@ def test_cli_apply_refused_with_stale_evidence(tmp_path, monkeypatch):
     cfg.codex_runtime_path = str(runtime2)
     cfg.save(str(cfg_url))
 
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc != 0
     assert "未验证" in out + err or "证据" in out + err
     assert codex_config.read_bytes() == before
@@ -354,15 +343,15 @@ def test_cli_undo_restores_previous_value(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "sync")
+    rc, out, err = run_cli_inprocess(cfg_url, "sync")
     assert rc == 0, err
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc == 0, err
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc == 0, err
     assert "model_catalog_json" in codex_config.read_text(encoding="utf-8")
 
-    rc, out, err = _run_cli(cfg_url, "undo")
+    rc, out, err = run_cli_inprocess(cfg_url, "undo")
     assert rc == 0, err
     text = codex_config.read_text(encoding="utf-8")
     assert "model_catalog_json" not in text
@@ -388,17 +377,17 @@ def test_cli_undo_refuses_on_conflict(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "sync")
+    rc, out, err = run_cli_inprocess(cfg_url, "sync")
     assert rc == 0, err
-    rc, out, err = _run_cli(cfg_url, "probe", "--verify")
+    rc, out, err = run_cli_inprocess(cfg_url, "probe", "--verify")
     assert rc == 0, err
-    rc, out, err = _run_cli(cfg_url, "apply")
+    rc, out, err = run_cli_inprocess(cfg_url, "apply")
     assert rc == 0, err
 
     # Externally change the value
     _write(codex_config, 'model_catalog_json = "/somewhere/else.json"\n')
 
-    rc, out, err = _run_cli(cfg_url, "undo")
+    rc, out, err = run_cli_inprocess(cfg_url, "undo")
     assert "冲突" in out + err
 
 
@@ -411,6 +400,6 @@ def test_cli_undo_no_record(tmp_path, monkeypatch):
     cfg_url = _build_config(tmp_path, runtime, merged, custom, codex_config)
     _write(custom, json.dumps(CUSTOM))
 
-    rc, out, err = _run_cli(cfg_url, "undo")
+    rc, out, err = run_cli_inprocess(cfg_url, "undo")
     assert rc != 0
     assert "无可撤销" in out + err or "没有" in out + err
