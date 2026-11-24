@@ -16,5 +16,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test
         run: swift test
+      - name: Verify Sparkle contract
+        run: ./script/verify_sparkle_contract.sh
       - name: Build app bundle
         run: ./script/build_app.sh --configuration release --output dist/CodexModelManager.app
+      - name: Verify built app bundle Sparkle wiring
+        run: ./script/verify_sparkle_contract.sh dist/CodexModelManager.app

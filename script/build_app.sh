@@ -7,8 +7,22 @@ configuration="debug"
 output_path="$project_root/dist/CodexModelManager.app"
 signing_identity="-"
 version="$(/usr/bin/plutil -extract version raw -o - "$project_root/product-version.json")"
-build_number="${version//./}"
+build_number=""
+explicit_build_number=0
 universal=0
+
+compute_monotonic_build_number() {
+    local ver="$1"
+    if [[ "$ver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        local major="${BASH_REMATCH[1]}"
+        local minor="${BASH_REMATCH[2]}"
+        local patch="${BASH_REMATCH[3]}"
+        echo "$((10#$major * 10000 + 10#$minor * 100 + 10#$patch))"
+    else
+        echo "版本号必须是 X.Y.Z 格式，当前为: $ver" >&2
+        exit 2
+    fi
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,6 +44,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --build-number)
             build_number="$2"
+            explicit_build_number=1
             shift 2
             ;;
         --universal)
@@ -44,6 +59,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$project_root"
+if (( ! explicit_build_number )); then
+    build_number="$(compute_monotonic_build_number "$version")"
+fi
 if (( universal )); then
     /usr/bin/swift build -c "$configuration" --arch arm64 --arch x86_64
     binary_dir="$(/usr/bin/swift build -c "$configuration" --arch arm64 --arch x86_64 --show-bin-path)"
@@ -117,8 +135,56 @@ create_icon_size 1024 icon_512x512@2x.png
 /usr/bin/plutil -insert CFBundleVersion -string "$build_number" "$plist_path"
 /usr/bin/plutil -insert LSMinimumSystemVersion -string "14.0" "$plist_path"
 /usr/bin/plutil -insert NSHighResolutionCapable -bool true "$plist_path"
+/usr/bin/plutil -insert SUAutomaticallyUpdate -bool false "$plist_path"
+/usr/bin/plutil -insert SUEnableAutomaticChecks -bool true "$plist_path"
+/usr/bin/plutil -insert SUFeedURL -string "https://github.com/gaofeng21cn/opl-codex-models/releases/latest/download/appcast.xml" "$plist_path"
+/usr/bin/plutil -insert SUPublicEDKey -string "SR+6mkq8nrhuOn5fydmkWDw/DYPXHXOZkCeSqAYNw0o=" "$plist_path"
+/usr/bin/plutil -insert SUScheduledCheckInterval -integer 21600 "$plist_path"
 
 /usr/bin/xattr -cr "$output_path"
+
+shared_embed_script="${OPL_MACOS_SPARKLE_SCRIPTS_DIR:-}/embed-and-sign-sparkle.sh"
+if [[ -n "${OPL_MACOS_SPARKLE_SCRIPTS_DIR:-}" && -x "$shared_embed_script" ]]; then
+    embed_args=(
+        --app "$output_path"
+        --signing-identity "$signing_identity"
+        --artifacts-dir "$project_root/.build/artifacts"
+        --expected-feed-url "https://github.com/gaofeng21cn/opl-codex-models/releases/latest/download/appcast.xml"
+    )
+    if (( universal )); then
+        embed_args+=(--archs "arm64 x86_64")
+    fi
+    "$shared_embed_script" "${embed_args[@]}"
+else
+    sparkle_framework_src="$project_root/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+    if [[ ! -d "$sparkle_framework_src" ]]; then
+        sparkle_framework_src="$(/usr/bin/find "$project_root/.build/artifacts" -path '*/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' -type d -print -quit 2>/dev/null || true)"
+    fi
+    if [[ -z "$sparkle_framework_src" || ! -d "$sparkle_framework_src" ]]; then
+        echo "缺少 Sparkle.framework（请先运行 swift package resolve）" >&2
+        exit 1
+    fi
+    frameworks_path="$contents_path/Frameworks"
+    sparkle_dest="$frameworks_path/Sparkle.framework"
+    sparkle_ver="$sparkle_dest/Versions/B"
+    /bin/mkdir -p "$frameworks_path"
+    /bin/rm -rf "$sparkle_dest"
+    /usr/bin/ditto "$sparkle_framework_src" "$sparkle_dest"
+    if (( universal )); then
+        /usr/bin/lipo "$sparkle_ver/Sparkle" -verify_arch arm64
+        /usr/bin/lipo "$sparkle_ver/Sparkle" -verify_arch x86_64
+    fi
+    sparkle_sign_args=(--force --sign "$signing_identity")
+    if [[ "$signing_identity" != "-" ]]; then
+        sparkle_sign_args+=(--options runtime --timestamp)
+    fi
+    /usr/bin/codesign "${sparkle_sign_args[@]}" "$sparkle_ver/XPCServices/Installer.xpc"
+    /usr/bin/codesign "${sparkle_sign_args[@]}" --preserve-metadata=entitlements "$sparkle_ver/XPCServices/Downloader.xpc"
+    /usr/bin/codesign "${sparkle_sign_args[@]}" "$sparkle_ver/Autoupdate"
+    /usr/bin/codesign "${sparkle_sign_args[@]}" "$sparkle_ver/Updater.app"
+    /usr/bin/codesign "${sparkle_sign_args[@]}" "$sparkle_dest"
+fi
+
 if [[ "$signing_identity" == "-" ]]; then
     /usr/bin/codesign --force --sign - "$helpers_path/CodexModelSync"
     /usr/bin/codesign --force --sign - "$output_path"

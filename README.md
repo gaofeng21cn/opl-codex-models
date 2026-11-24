@@ -26,6 +26,8 @@ brew install --cask opl-codex-models
 
 也可以从 [Releases](https://github.com/gaofeng21cn/opl-codex-models/releases/latest) 下载 `Codex-Models.dmg`，打开后将应用拖入“应用程序”文件夹。
 
+macOS 版支持双轨自动更新：应用内置基于 Sparkle 2 的自动检查与签名校验更新（可在菜单栏「CodexModelManager → 检查更新…」或「设置 → 应用更新」中管理）；同时下游 Homebrew Cask（`auto_updates true`）支持随时通过 `brew upgrade --cask opl-codex-models` 手动升级。
+
 使用旧名称 `opl-codex-model-manager` 安装的用户，运行 `brew update` 后即可通过新名称升级，Homebrew 会自动迁移安装记录，原有模型和配置继续保留。
 
 ## 首次使用

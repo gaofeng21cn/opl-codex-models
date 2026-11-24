@@ -12,7 +12,8 @@ let package = Package(
         .executable(name: "CodexModelSync", targets: ["CodexModelSync"])
     ],
     dependencies: [
-        .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
+        .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1")
     ],
     targets: [
         .target(
@@ -22,8 +23,16 @@ let package = Package(
         ),
         .executableTarget(
             name: "CodexModelManager",
-            dependencies: ["CodexModelCore"],
-            path: "Sources/CodexModelManager"
+            dependencies: [
+                "CodexModelCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
+            path: "Sources/CodexModelManager",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"
+                ])
+            ]
         ),
         .executableTarget(
             name: "CodexModelSync",

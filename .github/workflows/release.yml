@@ -1,100 +1,148 @@
 name: Release Codex Models
+
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+
 permissions:
   contents: read
+
 concurrency:
   group: codex-models-release
   cancel-in-progress: false
+
 jobs:
-  macos:
-    runs-on: macos-15
-    timeout-minutes: 60
-    environment: release
-    permissions:
-      contents: write
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.source.outputs.published }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+
       - name: Verify canonical product source
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="$(plutil -extract version raw -o - product-version.json)"
+          version="$(jq -er .version product-version.json)"
           test "$GITHUB_REF_NAME" = "v$version"
           test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
           git fetch origin main --quiet
           git merge-base --is-ancestor HEAD origin/main
-          swift test
           if gh release view "$GITHUB_REF_NAME" --json tagName > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/existing-release-error"; then
             echo 'published=true' >> "$GITHUB_OUTPUT"
           else
             grep -qi 'not found\|404\|release not found' "$RUNNER_TEMP/existing-release-error"
             echo 'published=false' >> "$GITHUB_OUTPUT"
           fi
-      - name: Configure Apple signing and notarization
-        if: steps.source.outputs.published != 'true'
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          TEAM_ID: ${{ secrets.TEAM_ID }}
-        run: |
-          set -euo pipefail
-          : "${BUILD_CERTIFICATE_BASE64:?Missing Developer ID certificate}"
-          : "${P12_PASSWORD:?Missing certificate password}"
-          : "${APPLE_ID:?Missing notarization account}"
-          : "${APPLE_ID_PASSWORD:?Missing notarization credential}"
-          : "${TEAM_ID:?Missing Apple team}"
-          keychain="$RUNNER_TEMP/models-release.keychain-db"
-          password="$(openssl rand -hex 24)"
-          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/developer-id.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
-          security list-keychains -d user -s "$keychain"
-          security default-keychain -d user -s "$keychain"
-          xcrun notarytool store-credentials codex-models-release --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$TEAM_ID" --keychain "$keychain"
-          echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
-      - name: Build, sign and notarize universal App and DMG
-        if: steps.source.outputs.published != 'true'
-        env:
-          SIGNING_IDENTITY: 'Developer ID Application: FENG GAO (SVVC4TA784)'
-          APPLE_NOTARY_PROFILE: codex-models-release
-        run: script/release.sh "${GITHUB_REF_NAME#v}"
+
+  macos:
+    needs: preflight
+    if: needs.preflight.outputs.published != 'true'
+    uses: gaofeng21cn/one-person-lab/.github/workflows/reusable-macos-sparkle-release.yml@main
+    secrets: inherit
+    with:
+      release_tag: ${{ github.ref_name }}
+      app_name: CodexModelManager.app
+      dmg_name: Codex-Models.dmg
+      volume_name: Codex Models
+      bundle_id: com.onepersonlab.codex-model-manager
+      display_name: CodexModelManager
+      expected_team_id: SVVC4TA784
+      signing_identity: "Developer ID Application: FENG GAO (SVVC4TA784)"
+      expected_feed_url: "https://github.com/gaofeng21cn/opl-codex-models/releases/latest/download/appcast.xml"
+      verify_binaries: "Contents/MacOS/CodexModelManager,Contents/Helpers/CodexModelSync"
+      preflight_command: "swift test && ./script/verify_sparkle_contract.sh"
+      build_app_command: './script/build_app.sh --configuration release --output dist/CodexModelManager.app --identity "$OPL_SIGNING_IDENTITY" --version "${RELEASE_TAG#v}" --universal'
+      runs_on: macos-15
+
+  publish:
+    needs:
+      - preflight
+      - macos
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && (needs.macos.result == 'success' || needs.preflight.outputs.published == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.preflight.outputs.published != 'true'
+        with:
+          name: release-macos
+          path: dist
+
       - name: Publish and verify the same product version
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          printf 'Codex Models %s\n\nSigned and notarized universal macOS App. Source: %s.\n' "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" > "$RUNNER_TEMP/release-notes.md"
-          if [ '${{ steps.source.outputs.published }}' = 'true' ]; then
-            gh release download "$GITHUB_REF_NAME" --pattern 'Codex-Models.dmg*' --dir dist
+          if [ '${{ needs.preflight.outputs.published }}' = 'true' ]; then
+            gh release download "$RELEASE_TAG" \
+              --pattern 'Codex-Models.dmg*' \
+              --pattern 'appcast.xml' \
+              --dir dist
           else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Codex Models ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/release-notes.md" dist/Codex-Models.dmg dist/Codex-Models.dmg.sha256
+            (cd dist && sha256sum --check Codex-Models.dmg.sha256)
+            printf 'Codex Models %s\n\nSigned and notarized universal macOS App with Sparkle 2 in-app automatic updates alongside Homebrew Cask. Source: %s.\n' \
+              "${RELEASE_TAG#v}" "$SOURCE_SHA" > "$RUNNER_TEMP/release-notes.md"
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "Codex Models ${RELEASE_TAG#v}" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              dist/Codex-Models.dmg \
+              dist/Codex-Models.dmg.sha256 \
+              dist/appcast.xml
           fi
-          (cd dist && shasum -a 256 -c Codex-Models.dmg.sha256)
-          xcrun stapler validate dist/Codex-Models.dmg
-          spctl --assess --type open --context context:primary-signature dist/Codex-Models.dmg
-          gh release view "$GITHUB_REF_NAME" --json tagName,assets > "$RUNNER_TEMP/release.json"
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release.json').read_text())
-          assert release['tagName'] == os.environ['GITHUB_REF_NAME']
-          for name in ('Codex-Models.dmg', 'Codex-Models.dmg.sha256'):
-              asset, = [a for a in release['assets'] if a['name'] == name]
-              assert asset['digest'] == 'sha256:' + hashlib.sha256((Path('dist') / name).read_bytes()).hexdigest()
+
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            "https://api.github.com/repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/public-release.json"
+          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false' "$RUNNER_TEMP/public-release.json" >/dev/null
+
+          python3 - "$RUNNER_TEMP/public-release.json" "dist/Codex-Models.dmg" "dist/Codex-Models.dmg.sha256" "dist/appcast.xml" "$REPOSITORY" "$RELEASE_TAG" <<'PY'
+          import hashlib, json, os, sys
+          import xml.etree.ElementTree as ET
+
+          release_path, dmg_path, sha_path, appcast_path, repo, tag = sys.argv[1:7]
+          release = json.loads(open(release_path, encoding="utf-8").read())
+          expected = {"Codex-Models.dmg": dmg_path, "Codex-Models.dmg.sha256": sha_path, "appcast.xml": appcast_path}
+          assets = {a["name"]: a for a in release["assets"]}
+          if set(assets) != set(expected):
+              raise SystemExit(f"Unexpected asset set: {sorted(assets)}")
+          for name, path in expected.items():
+              digest = "sha256:" + hashlib.sha256(open(path, "rb").read()).hexdigest()
+              if assets[name].get("digest") != digest:
+                  raise SystemExit(f"Digest mismatch for {name}")
+
+          version = tag.removeprefix("v")
+          sparkle_ns = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+          ns = {"sparkle": sparkle_ns}
+          root = ET.parse(appcast_path).getroot()
+          items = root.findall("./channel/item")
+          if len(items) != 1:
+              raise SystemExit(f"Expected 1 appcast item, got {len(items)}")
+          item = items[0]
+          if item.findtext("sparkle:shortVersionString", namespaces=ns) != version:
+              raise SystemExit("Public appcast shortVersionString mismatch")
+          if not item.findtext("sparkle:version", namespaces=ns):
+              raise SystemExit("Public appcast missing sparkle:version")
+          if item.findtext("sparkle:hardwareRequirements", namespaces=ns):
+              raise SystemExit("Universal appcast must not set hardwareRequirements")
+          enc = item.find("enclosure")
+          if enc is None:
+              raise SystemExit("Missing enclosure in appcast")
+          expected_url = f"https://github.com/{repo}/releases/download/{tag}/Codex-Models.dmg"
+          if enc.attrib.get("url") != expected_url:
+              raise SystemExit(f"Unexpected enclosure url: {enc.attrib.get('url')}")
+          if enc.attrib.get("length") != str(os.path.getsize(dmg_path)):
+              raise SystemExit("appcast enclosure length mismatch")
+          if not enc.attrib.get(f"{{{sparkle_ns}}}edSignature"):
+              raise SystemExit("appcast enclosure missing sparkle:edSignature")
           PY
-      - name: Remove temporary Apple credentials
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/models-release.keychain-db" || true

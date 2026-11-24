@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: CatalogStore
+    @ObservedObject var updater: AppUpdater
     @State private var draft = ConfigurationDraft()
     @State private var loaded = false
     @State private var runtimes: [CodexRuntime] = []
@@ -87,6 +88,19 @@ struct SettingsView: View {
                 LabeledContent("备份目录") {
                     TextField("备份目录", text: $draft.backupDirectoryPath)
                         .multilineTextAlignment(.trailing)
+                }
+            }
+
+            Section("应用更新") {
+                LabeledContent("当前版本", value: updater.currentVersionLabel)
+                Toggle("自动检查更新", isOn: $updater.automaticallyChecksForUpdates)
+                    .disabled(!updater.isConfigured)
+                LabeledContent("手动检查") {
+                    Button("检查更新…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                    .help(updater.isConfigured ? "检查 Codex Models 更新" : "仅在打包安装后的应用内可用")
                 }
             }
 

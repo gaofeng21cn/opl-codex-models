@@ -49,7 +49,6 @@ trap '/bin/rm -rf -- "$staging"' EXIT
     --output "$app" \
     --identity "$identity" \
     --version "$version" \
-    --build-number "${version//./}" \
     --universal
 
 details="$(/usr/bin/codesign -dvvv "$app" 2>&1)"

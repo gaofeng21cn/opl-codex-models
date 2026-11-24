@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct CodexModelManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = CatalogStore()
+    @StateObject private var updater = AppUpdater()
 
     var body: some Scene {
         WindowGroup("Codex Models") {
@@ -20,6 +21,13 @@ struct CodexModelManagerApp: App {
         }
         .defaultSize(width: 1_320, height: 760)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+            }
+
             CommandMenu("模型目录") {
                 Button("刷新") {
                     Task { await store.refresh() }
@@ -43,7 +51,7 @@ struct CodexModelManagerApp: App {
         }
 
         Settings {
-            SettingsView(store: store)
+            SettingsView(store: store, updater: updater)
         }
     }
 }
