@@ -188,3 +188,50 @@ def test_restart_rotates_instance_preserves_restore_record(target):
     assert manager.health(new)['instance'] == new['instance']
     for key in ('backup', 'original_url', 'before_sha256', 'after_sha256'):
         assert old[key] == new[key]
+
+
+def test_replace_url_uses_tomlkit_for_comments_and_inline_tables():
+    raw = (
+        b'# header\r\nmodel_provider = "Relay"\r\n'
+        b'[model_providers."Relay"]\r\n'
+        b'base_url = "https://relay.invalid/v1" # keep me\r\n'
+        b'wire_api = "responses"\r\n'
+    )
+    updated = manager.replace_url(raw, 'Relay', 'https://relay.invalid/v1', 'http://127.0.0.1:18787/v1')
+    assert b'# header\r\n' in updated
+    assert b'# keep me\r\n' in updated
+    assert b'http://127.0.0.1:18787/v1' in updated
+
+    inline = b'model_providers = { Relay = { base_url = "https://relay.invalid/v1" } }\n'
+    updated_inline = manager.replace_url(inline, 'Relay', 'https://relay.invalid/v1', 'http://127.0.0.1:18787/v1')
+    assert b'http://127.0.0.1:18787/v1' in updated_inline
+
+
+def test_transaction_lock_is_non_blocking_via_filelock(tmp_path):
+    config = tmp_path / 'config.toml'
+    config.write_text('model_provider = "Relay"\n', encoding='utf-8')
+    with manager.transaction_lock(config):
+        with pytest.raises(manager.BridgeActionError, match='另一个窗口正在操作桥'):
+            with manager.transaction_lock(config):
+                pass
+
+
+def test_process_identity_and_desktop_running_use_psutil(tmp_path, monkeypatch):
+    ident = manager.process_identity(os.getpid())
+    assert ident is not None and ident['pid'] == os.getpid() and ident['exe'] and ident['start_ticks']
+    assert manager.process_identity(-1) is None
+
+    class _FakeProc:
+        def __init__(self, info):
+            self.info = info
+
+    monkeypatch.setattr(manager.os, 'name', 'nt')
+    monkeypatch.setattr(manager.subprocess, 'run', lambda *a, **kw: pytest.fail('local Windows check must not spawn PowerShell'))
+    monkeypatch.setattr(manager.psutil, 'process_iter', lambda attrs: [_FakeProc({'name': 'Codex.exe', 'exe': r'C:\Codex\Codex.exe'})])
+    assert manager.desktop_running(tmp_path / 'config.toml') is True
+
+    monkeypatch.setattr(manager.psutil, 'process_iter', lambda attrs: [_FakeProc({'name': 'ChatGPT.exe', 'exe': r'C:\Program Files\WindowsApps\OpenAI.Codex\ChatGPT.exe'})])
+    assert manager.desktop_running(tmp_path / 'config.toml') is True
+
+    monkeypatch.setattr(manager.psutil, 'process_iter', lambda attrs: [_FakeProc({'name': 'notepad.exe', 'exe': r'C:\Windows\notepad.exe'})])
+    assert manager.desktop_running(tmp_path / 'config.toml') is False

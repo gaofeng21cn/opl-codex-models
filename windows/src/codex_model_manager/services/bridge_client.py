@@ -56,7 +56,7 @@ class BridgeClient:
             raise BridgeActionError('无法启动后台管理程序，请检查 Python/WSL 安装。') from None
         try: reply = json.loads(result.stdout)
         except ValueError:
-            raise BridgeActionError('后台没有返回有效状态。WSL 模式需要 Python 3.11 或更新版本。') from None
+            raise BridgeActionError('后台没有返回有效状态。WSL 模式需要 Python 3.11+ 并安装 requirements.txt 依赖。') from None
         if not reply.get('ok'): raise BridgeActionError(reply.get('error', '后台操作未完成。'))
         data = reply['result']; data['backend'] = backend
         return data

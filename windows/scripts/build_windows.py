@@ -15,7 +15,9 @@ def main():
         raise SystemExit('Build stopped: dist contains user-data. Move the existing portable folder to a safe location before rebuilding.')
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
                '--icon', str(ROOT/'src/codex_model_manager/gui/assets/app.ico'),
-               '--paths', str(ROOT/'src'), '--collect-submodules', 'codex_model_manager', '--collect-all', 'sv_ttk',
+               '--paths', str(ROOT/'src'), '--collect-submodules', 'codex_model_manager',
+               '--collect-submodules', 'aiohttp', '--hidden-import', 'psutil', '--hidden-import', 'filelock',
+               '--collect-all', 'sv_ttk',
                '--add-data', str(ROOT/'src/codex_model_manager') + ';bridge-runtime/src/codex_model_manager',
                '--add-data', str(ROOT/'scripts/bridge_worker.py') + ';bridge-runtime/scripts',
                '--add-data', str(ROOT/'scripts/gui_model_management_smoke.py') + ';bridge-runtime/scripts',

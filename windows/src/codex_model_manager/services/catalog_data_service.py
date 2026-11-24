@@ -10,9 +10,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import List
+
+from filelock import FileLock
 
 from ..core.errors import ConflictError
 
@@ -22,27 +23,8 @@ def _catalog_write_lock(path):
     """Serialize GUI/CLI edits; keep the lock stable across atomic replacement."""
     target = Path(path).resolve()
     lock_path = target.with_name(f".{target.name}.lock")
-    with lock_path.open("a+b") as lock:
-        if lock.tell() == 0:
-            lock.write(b"\0")
-            lock.flush()
-        lock.seek(0)
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            lock.seek(0)
-            if os.name == "nt":
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    with FileLock(str(lock_path)):
+        yield
 
 
 @dataclass

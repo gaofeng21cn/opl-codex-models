@@ -87,21 +87,24 @@ def is_deepseek_flash_model(model):
     """Return whether *model* uses the DeepSeek Flash reasoning adapter."""
     return isinstance(model, str) and model in DEEPSEEK_FLASH_MODEL_IDS
 
+import asyncio
+import contextlib
+import hashlib
 import json
-import http.client
-import queue
-import select
+import logging
+import os
+import signal
 import socket
-import sys
 import threading
 import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
+
+import aiohttp
+from aiohttp import web
 
 from .tool_recovery import policy, recover_context
 
@@ -968,6 +971,94 @@ def _observed_calls(raw, content_type, truncated):
         return [], "unparsed"
 
 
+_MAX_REQUEST_BYTES = 32 * 1024 * 1024
+_MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+_SUPPORTED_ROUTES = frozenset({
+    "/responses",
+    "/v1/responses",
+    "/responses/compact",
+    "/v1/responses/compact",
+})
+_HOP_BY_HOP_HEADERS = frozenset({
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "upgrade",
+    "content-encoding",
+    "accept-encoding",
+})
+_AUTO_DECOMPRESSED_ENCODINGS = frozenset({"", "identity", "gzip", "x-gzip", "deflate"})
+
+
+_SILENT_LOGGER = logging.getLogger(__name__ + ".silent")
+_SILENT_LOGGER.addHandler(logging.NullHandler())
+_SILENT_LOGGER.propagate = False
+
+
+class _UnsupportedEncodingError(Exception):
+    pass
+
+
+class _RequestLimitError(Exception):
+    pass
+
+
+async def _read_request_body(request: web.Request) -> bytes:
+    """Read an incoming request body (aiohttp decodes chunked/gzip/deflate) with a 32 MiB cap."""
+    encoding = request.headers.get("Content-Encoding", "identity").strip().lower()
+    if encoding not in _AUTO_DECOMPRESSED_ENCODINGS:
+        raise _UnsupportedEncodingError(encoding)
+
+    content_length = request.headers.get("Content-Length")
+    if content_length is not None and not request.headers.get("Transfer-Encoding"):
+        try:
+            declared = int(content_length)
+        except ValueError as exc:
+            raise _RequestLimitError() from exc
+        if not 0 < declared <= _MAX_REQUEST_BYTES:
+            raise _RequestLimitError()
+
+    buf = bytearray()
+    async for chunk in request.content.iter_chunked(65536):
+        if len(buf) + len(chunk) > _MAX_REQUEST_BYTES:
+            raise _RequestLimitError()
+        buf.extend(chunk)
+
+    if not 0 < len(buf) <= _MAX_REQUEST_BYTES:
+        raise _RequestLimitError()
+    return bytes(buf)
+
+
+def _upstream_headers(request: web.Request) -> Dict[str, str]:
+    """Preserve routing/session headers, stripping hop-by-hop and wire-encoding headers."""
+    blocked = set(_HOP_BY_HOP_HEADERS)
+    for token in request.headers.get("Connection", "").split(","):
+        name = token.strip().lower()
+        if name:
+            blocked.add(name)
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in blocked}
+    headers["Accept-Encoding"] = "gzip, deflate"
+    return headers
+
+
+def _stream_error_bytes(kind: str, status: Optional[int] = None) -> bytes:
+    event: Dict[str, Any] = {
+        "type": "error",
+        "code": kind,
+        "message": "Local bridge request failed",
+        "param": None,
+    }
+    if status is not None:
+        event["http_status"] = status
+    return ("event: error\ndata: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+
 @dataclass
 class BridgeServer:
     upstream_url: str
@@ -1022,7 +1113,10 @@ class BridgeServer:
         policy(self.experiment_mode_file, self.protocol_translation, self.context_recovery)
         self.registry = ToolRegistry()
         self.reasoning_history = ReasoningHistory()
-        self._server: Optional[ThreadingHTTPServer] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._stop_event: Optional[asyncio.Event] = None
+        self._bound_port: Optional[int] = None
+        self._stop_requested = False
         self._ready = threading.Event()
         self._capture_index = 0
         self._active_requests = 0
@@ -1055,8 +1149,6 @@ class BridgeServer:
         if not self.capture_dir:
             return
         try:
-            import os
-
             os.makedirs(self.capture_dir, exist_ok=True)
             self._capture_index += 1
             index = self._capture_index
@@ -1084,15 +1176,18 @@ class BridgeServer:
 
     def stop(self) -> None:
         """Stop a running server (used by tests and by graceful shutdown)."""
-        server = self._server
-        if server is not None:
-            server.shutdown()
+        with self._activity_lock:
+            self._stop_requested = True
+            loop = self._loop
+            stop_event = self._stop_event
+        if loop is not None and stop_event is not None and not loop.is_closed():
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(stop_event.set)
 
     @property
     def bound_port(self) -> Optional[int]:
         """The effective port, which is useful when constructed with ``port=0``."""
-        server = self._server
-        return server.server_address[1] if server is not None else None
+        return self._bound_port
 
     def wait_ready(self, timeout: float = 5.0) -> bool:
         """Block until the listener is accepting connections."""
@@ -1104,364 +1199,465 @@ class BridgeServer:
         _outgoing, declarations = translate_request(payload, inherited)
         return declarations
 
-    def serve_forever(self) -> None:
-        bridge = self
+    def _target_url(self, request: web.Request) -> str:
+        upstream = urlsplit(self.upstream_url)
+        base = upstream.path.rstrip("/")
+        path = request.path
+        if base.endswith("/v1") and path.startswith("/v1/"):
+            path = path[3:]
+        return urlunsplit((upstream.scheme, upstream.netloc, base + path, request.query_string, ""))
 
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *_args) -> None:
-                return
+    def _build_bytes_response(
+        self,
+        status: int,
+        data: bytes,
+        content_type: str = "application/json",
+        headers: Optional[Any] = None,
+    ) -> web.Response:
+        out_headers: Dict[str, str] = {"Content-Type": content_type}
+        if headers:
+            for name in ("Retry-After", "X-Request-Id"):
+                value = headers.get(name)
+                if value:
+                    out_headers[name] = value
+        return web.Response(status=status, body=data, headers=out_headers)
 
-            def do_GET(self) -> None:  # noqa: N802
-                if self.path.rstrip("/") in ("", "/health", "/healthz"):
-                    mode, _, _ = policy(bridge.experiment_mode_file, bridge.protocol_translation, bridge.context_recovery)
-                    body = json.dumps({"ok": True, "bridge": "codex-responses",
-                                       "identity": "codex-local-workarounds-v1", "instance": bridge.instance_id,
-                                       "compaction_passthrough": True, "bridge_version": BRIDGE_VERSION,
-                                       "active_requests": bridge._active_requests,
-                                       "upstream": bridge.upstream_url,
-                                       "experiment_mode": mode,
-                                       "models": sorted(bridge.scoped_models) if bridge.scoped_models else None}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
-                self.send_error(404)
+    async def _start_stream(
+        self,
+        request: web.Request,
+        status: int = 200,
+        content_type: str = "text/event-stream",
+        headers: Optional[Any] = None,
+    ) -> web.StreamResponse:
+        out_headers: Dict[str, str] = {
+            "Content-Type": content_type,
+            "Cache-Control": "no-cache",
+        }
+        if headers:
+            for name in ("Retry-After", "X-Request-Id"):
+                value = headers.get(name)
+                if value:
+                    out_headers[name] = value
+            ce = headers.get("Content-Encoding", "")
+            if ce and ce.strip().lower() not in _AUTO_DECOMPRESSED_ENCODINGS:
+                out_headers["Content-Encoding"] = ce
+        stream = web.StreamResponse(status=status, headers=out_headers)
+        await stream.prepare(request)
+        return stream
 
-            protocol_version = "HTTP/1.1"
+    async def _handle_get(self, request: web.Request) -> web.StreamResponse:
+        if request.path.rstrip("/") in ("", "/health", "/healthz"):
+            mode, _, _ = policy(self.experiment_mode_file, self.protocol_translation, self.context_recovery)
+            body = json.dumps({
+                "ok": True,
+                "bridge": "codex-responses",
+                "identity": "codex-local-workarounds-v1",
+                "instance": self.instance_id,
+                "compaction_passthrough": True,
+                "bridge_version": BRIDGE_VERSION,
+                "active_requests": self._active_requests,
+                "upstream": self.upstream_url,
+                "experiment_mode": mode,
+                "models": sorted(self.scoped_models) if self.scoped_models else None,
+            }).encode("utf-8")
+            return web.Response(status=200, body=body, content_type="application/json")
+        return web.Response(status=404)
 
-            def _headers(self) -> dict:
-                # Preserve routing/session headers, but never hop-by-hop headers.
-                blocked = {"host", "content-length", "transfer-encoding", "connection",
-                           "keep-alive", "proxy-authenticate", "proxy-authorization",
-                           "te", "trailer", "upgrade", "accept-encoding"}
-                blocked.update(x.strip().lower() for x in self.headers.get("Connection", "").split(","))
-                headers = {k: v for k, v in self.headers.items() if k.lower() not in blocked}
-                headers["Accept-Encoding"] = "identity"
-                return headers
-
-            def _connection(self):
-                upstream = urlsplit(bridge.upstream_url)
-                factory = http.client.HTTPSConnection if upstream.scheme == "https" else http.client.HTTPConnection
-                connection = factory(upstream.hostname, upstream.port, timeout=bridge.timeout)
-                route = urlsplit(self.path)
-                base = upstream.path.rstrip("/")
-                path = route.path
-                if base.endswith("/v1") and path.startswith("/v1/"):
-                    path = path[3:]
-                return connection, urlunsplit(("", "", base + path, route.query, ""))
-
-            def _send_bytes(self, status, data, content_type="application/json", headers=None):
-                self.send_response(status)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Connection", "close")
-                self.close_connection = True
-                for name in ("Retry-After", "X-Request-Id"):
-                    if headers and headers.get(name):
-                        self.send_header(name, headers[name])
-                self.end_headers()
-                self.wfile.write(data)
-                self.wfile.flush()
-
-            def _start_stream(self, status=200, content_type="text/event-stream", headers=None):
-                self.send_response(status)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                if headers:
-                    for key in ("Content-Encoding", "Retry-After", "X-Request-Id"):
-                        if headers.get(key):
-                            self.send_header(key, headers[key])
-                self.end_headers()
-                self.close_connection = True
-                self._stream_started = True
-
-            def _watch_disconnect(self, connection, finished):
-                # A cancelled desktop request must release a pending upstream call,
-                # including before the upstream has sent response headers.
-                while not finished.wait(0.1):
-                    try:
-                        readable, _, _ = select.select([self.connection], [], [], 0)
-                        if readable and self.connection.recv(1, socket.MSG_PEEK) == b"":
-                            self._disconnected.set()
-                            if connection.sock:
-                                try:
-                                    connection.sock.shutdown(socket.SHUT_RDWR)
-                                except OSError:
-                                    pass
-                            connection.close()
-                            return
-                    except (OSError, ValueError):
-                        return
-
-            def _relay_verbatim(self, raw_body, incoming):
-                connection, path = self._connection()
-                finished = threading.Event()
-                threading.Thread(target=self._watch_disconnect, args=(connection, finished), daemon=True).start()
-                caught = None
-                status = None
-                evidence = bytearray()
-                truncated = False
-                content_type = ""
-                try:
-                    self._experiment_meta["upstream_request_bytes"] = len(raw_body)
-                    connection.request("POST", path, raw_body, self._headers())
-                    response = connection.getresponse()
-                    status = response.status
-                    if not 200 <= status < 300:
-                        self._experiment_meta["error_origin"] = "upstream_http"
-                    content_type = response.getheader("Content-Type", "application/json")
-                    if bool(incoming.get("stream")):
-                        self._start_stream(response.status, content_type, response.headers)
-                        while not self._disconnected.is_set():
-                            chunk = response.read1(65536)
-                            if not chunk:
-                                break
-                            if bridge.record_path and self._experiment_meta.get("in_scope"):
-                                if len(evidence) + len(chunk) <= 2 * 1024 * 1024:
-                                    evidence.extend(chunk)
-                                else:
-                                    truncated = True
-                            self.wfile.write(chunk)
-                            self.wfile.flush()
-                    else:
-                        # Keep non-stream passthrough a normal, length-delimited
-                        # response; only SSE requests use connection-close framing.
-                        data = response.read()
-                        if bridge.record_path and self._experiment_meta.get("in_scope"):
-                            truncated = len(data) > 2 * 1024 * 1024
-                            if not truncated:
-                                evidence.extend(data)
-                        self._send_bytes(response.status, data, content_type, response.headers)
-                except (OSError, http.client.HTTPException) as exc:
-                    caught = type(exc).__name__
-                    if not self._stream_started and not self._disconnected.is_set():
-                        self._send_bytes(502, b'{"error":{"type":"bridge_error","message":"Upstream connection failed"}}')
-                finally:
-                    finished.set()
-                    connection.close()
-                    calls, parse = _observed_calls(bytes(evidence), content_type, truncated)
-                    bridge.record({**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                   "route": urlsplit(self.path).path, "model": incoming.get("model"),
-                                   "mode": "passthrough", "client_stream": bool(incoming.get("stream")),
-                                   "upstream_status": status, "returned_calls": calls, "call_parse": parse,
-                                   "client_disconnected": self._disconnected.is_set(),
-                                   "error": caught})
-
-            def _translated(self, incoming):
-                scope = conversation_key(incoming)
-                # Do not allow different authenticated clients/models to share the
-                # optional continuation cache. Hash credentials only in memory.
-                import hashlib
-                owner = hashlib.sha256((self.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()).hexdigest()
-                key = owner + ":" + scope if scope else None
-                outgoing, declarations = translate_request(incoming, bridge.registry.get(key))
-                bridge.registry.put(key, declarations)
-                outgoing["stream"] = False
-                encoded_body = json.dumps(outgoing, ensure_ascii=False).encode()
-                self._experiment_meta["upstream_request_bytes"] = len(encoded_body)
-                connection, path = self._connection()
-                finished = threading.Event()
-                result = queue.Queue(maxsize=1)
-                recorded = False
-                upstream_status = None
-
-                def fetch():
-                    try:
-                        connection.request("POST", path, encoded_body, self._headers())
-                        response = connection.getresponse()
-                        result.put((response.status, response.headers, response.read()))
-                    except (OSError, http.client.HTTPException) as exc:
-                        result.put(exc)
-                    finally:
-                        connection.close()
-
-                threading.Thread(target=self._watch_disconnect, args=(connection, finished), daemon=True).start()
-                threading.Thread(target=fetch, daemon=True).start()
-                try:
-                    heartbeat_at = time.monotonic() + bridge.heartbeat_interval
-                    while True:
-                        if self._disconnected.is_set():
-                            return
-                        try:
-                            response_result = result.get(timeout=0.1)
-                            break
-                        except queue.Empty:
-                            if incoming.get("stream") and time.monotonic() >= heartbeat_at:
-                                if not self._stream_started:
-                                    self._start_stream()
-                                self.wfile.write(b": bridge waiting for upstream\n\n")
-                                self.wfile.flush()
-                                heartbeat_at = time.monotonic() + bridge.heartbeat_interval
-                    if isinstance(response_result, Exception):
-                        raise ValueError("Upstream connection failed") from response_result
-                    status, headers, raw = response_result
-                    upstream_status = status
-                    if not 200 <= status < 300:
-                        self._experiment_meta["error_origin"] = "upstream_http"
-                    # Never follow redirects (especially with Authorization).
-                    if not 200 <= status < 300:
-                        self._experiment_meta["reasoning_required_error"] = (b"reasoning_text" in raw and b"passed back" in raw)
-                        if not self._stream_started:
-                            self._send_bytes(status, raw, headers.get("Content-Type", "application/json"), headers)
-                        else:
-                            self._stream_error("upstream_http_error", status)
-                        return
-                    body = json.loads(raw)
-                    if not isinstance(body, dict):
-                        raise ValueError("Upstream response must be an object")
-                    response_id = body.get("id")
-                    if isinstance(response_id, str) and response_id:
-                        bridge.registry.put(owner + ":" + response_key(response_id), declarations)
-                    if is_deepseek_flash_model(incoming.get("model")):
-                        body, normalized = normalize_deepseek_reasoning(body)
-                        self._experiment_meta["reasoning_output_normalized"] = normalized
-                        bridge.reasoning_history.remember(owner, body)
-                    upstream_calls = call_metadata(body)
-                    diagnostics = []
-                    body = translate_response(body, declarations, diagnostics)
-                    raw_out = _sse_response(body) if incoming.get("stream") else json.dumps(body, ensure_ascii=False).encode()
-                    meta = {**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
-                            "route": urlsplit(self.path).path, "model": incoming.get("model"),
-                            "mode": "translate", "client_stream": bool(incoming.get("stream")),
-                            "declared": declarations.describe(),
-                            "declared_sources": [source for source, present in (
-                                ("additional_tools", any(isinstance(x, dict) and x.get("type") == "additional_tools" for x in incoming.get("input", []) if isinstance(incoming.get("input"), list))),
-                                ("top_level_tools", bool(incoming.get("tools")))) if present],
-                            "upstream_calls": upstream_calls, "translated_calls": call_metadata(body),
-                            "client_events": _sse_event_names(raw_out) if incoming.get("stream") else [],
-                            "diagnostics": diagnostics, "upstream_status": status}
-                    bridge.record(meta)
-                    recorded = True
-                    bridge.capture(raw.decode("utf-8", "replace"), raw_out.decode("utf-8", "replace"), meta)
-                    if self._stream_started:
-                        self.wfile.write(raw_out)
-                        self.wfile.flush()
-                    else:
-                        self._send_bytes(status, raw_out, "text/event-stream" if incoming.get("stream") else "application/json")
-                finally:
-                    finished.set()
-                    if not recorded:
-                        bridge.record({**self._experiment_meta, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                       "model": incoming.get("model"), "mode": "translate", "upstream_status": upstream_status,
-                                       "client_disconnected": self._disconnected.is_set(), "error": "translation_not_completed"})
-                    # shutdown interrupts a fetch still waiting after cancellation.
-                    if self._disconnected.is_set() and connection.sock:
-                        try:
-                            connection.sock.shutdown(socket.SHUT_RDWR)
-                        except OSError:
-                            pass
-                    connection.close()
-
-            def _stream_error(self, kind, status=None):
-                event = {"type": "error", "code": kind,
-                         "message": "Local bridge request failed", "param": None}
-                if status is not None:
-                    event["http_status"] = status
-                self.wfile.write(("event: error\ndata: " + json.dumps(event) + "\n\n").encode())
-                self.wfile.flush()
-
-            def do_POST(self):  # noqa: N802
-                self._stream_started = False
-                self._disconnected = threading.Event()
-                self._experiment_meta = {"request_ref": uuid.uuid4().hex[:12], "bridge_version": BRIDGE_VERSION}
-                with bridge._activity_lock:
-                    bridge._active_requests += 1
-                try:
-                    if self.headers.get("Upgrade"):
-                        self._send_bytes(501, b'{"error":"WebSocket is not supported"}')
-                        return
-                    route = urlsplit(self.path).path
-                    if route not in ("/responses", "/v1/responses",
-                                     "/responses/compact", "/v1/responses/compact"):
-                        self._send_bytes(404, b'{"error":"Unsupported route"}')
-                        return
-                    if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Encoding", "identity") != "identity":
-                        self._send_bytes(415, b'{"error":"Unsupported request encoding"}')
-                        return
-                    length = int(self.headers.get("Content-Length", "0"))
-                    self._experiment_meta["request_bytes"] = length
-                    if not 0 < length <= 32 * 1024 * 1024:
-                        bridge.record({**self._experiment_meta, "error_origin": "local_request_limit", "http_status": 413})
-                        self._send_bytes(413, b'{"error":"Invalid or oversized request"}')
-                        return
-                    self.connection.settimeout(bridge.timeout)
-                    raw_body = self.rfile.read(length)
-                    incoming = json.loads(raw_body)
-                    if not isinstance(incoming, dict):
-                        raise ValueError("Request must be an object")
-                    selected = bridge.translates(incoming.get("model"))
-                    mode, protocol, context = policy(bridge.experiment_mode_file, bridge.protocol_translation, bridge.context_recovery)
-                    self._experiment_meta.update(experiment_mode=mode if selected else "out_of_scope", in_scope=selected,
-                                                 context_recovery={"enabled": False}, route=route)
-                    if selected:
-                        self._experiment_meta["request_tools"] = _declaration_metadata(incoming)
-                    if selected and protocol and is_deepseek_flash_model(incoming.get("model")):
-                        import hashlib
-                        owner = hashlib.sha256((self.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()).hexdigest()
-                        incoming, normalized = normalize_deepseek_reasoning(incoming)
-                        self._experiment_meta["reasoning_input_normalized"] = normalized
-                        incoming, restored = bridge.reasoning_history.restore(owner, incoming)
-                        self._experiment_meta["reasoning_items_restored"] = restored
-                        self._experiment_meta["reasoning_inventory"] = reasoning_inventory(incoming)
-                        if restored or normalized:
-                            raw_body = json.dumps(incoming, ensure_ascii=False).encode()
-                    compact = compaction_reason(incoming, route)
-                    self._experiment_meta["request_kind"] = "compaction" if compact else "response"
-                    if compact:
-                        # A transforms tools/history and forces stream=False; B
-                        # changes messages. Neither is valid for opaque compact
-                        # operations. Preserve the original body and response,
-                        # including stream framing, in every mode/model scope.
-                        self._experiment_meta["bypass_reason"] = compact
-                        self._relay_verbatim(raw_body, incoming)
-                        return
-                    if selected and context:
-                        _, declared = translate_request(incoming)
-                        incoming, recovery = recover_context(incoming, declared)
-                        self._experiment_meta["context_recovery"] = recovery
-                        if recovery["hint_added"] or recovery["removed_messages"]:
-                            raw_body = json.dumps(incoming, ensure_ascii=False).encode()
-                    if selected and protocol:
-                        self._translated(incoming)
-                    else:
-                        self._relay_verbatim(raw_body, incoming)
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    self.close_connection = True
-                except (OSError, ValueError, TypeError, http.client.HTTPException):
-                    # Never render exception text: it may contain upstream bodies,
-                    # URLs, arguments or credentials.
-                    try:
-                        if self._stream_started:
-                            self._stream_error("bridge_error")
-                        else:
-                            self._send_bytes(502, b'{"error":{"type":"bridge_error","message":"Invalid request or upstream failure"}}')
-                    except OSError:
-                        pass
-                finally:
-                    with bridge._activity_lock:
-                        bridge._active_requests -= 1
-
-
-        class Server(ThreadingHTTPServer):
-            address_family = socket.AF_INET6 if bridge.host == "::1" else socket.AF_INET
-            daemon_threads = True
-
-            def handle_error(self, request, client_address):
-                # Avoid default traceback output with untrusted request content.
-                return
-
-        server = Server((self.host, self.port), Handler)
-        self._server = server
-        self._ready.set()
+    async def _relay_verbatim(
+        self,
+        request: web.Request,
+        session: aiohttp.ClientSession,
+        raw_body: bytes,
+        incoming: dict,
+        experiment_meta: dict,
+    ) -> web.StreamResponse:
+        target_url = self._target_url(request)
+        experiment_meta["upstream_request_bytes"] = len(raw_body)
+        caught: Optional[str] = None
+        status: Optional[int] = None
+        evidence = bytearray()
+        truncated = False
+        content_type = ""
+        disconnected = False
+        stream_resp: Optional[web.StreamResponse] = None
         try:
-            server.serve_forever()
+            async with session.post(
+                target_url,
+                data=raw_body,
+                headers=_upstream_headers(request),
+                allow_redirects=False,
+                auto_decompress=True,
+            ) as upstream_resp:
+                status = upstream_resp.status
+                if not 200 <= status < 300:
+                    experiment_meta["error_origin"] = "upstream_http"
+                content_type = upstream_resp.headers.get("Content-Type", "application/json")
+                if bool(incoming.get("stream")):
+                    stream_resp = await self._start_stream(
+                        request, status, content_type, upstream_resp.headers
+                    )
+                    async for chunk in upstream_resp.content.iter_any():
+                        if not chunk:
+                            continue
+                        if self.record_path and experiment_meta.get("in_scope"):
+                            if len(evidence) + len(chunk) <= _MAX_EVIDENCE_BYTES:
+                                evidence.extend(chunk)
+                            else:
+                                truncated = True
+                        await stream_resp.write(chunk)
+                    await stream_resp.write_eof()
+                    return stream_resp
+                data = await upstream_resp.read()
+                if self.record_path and experiment_meta.get("in_scope"):
+                    truncated = len(data) > _MAX_EVIDENCE_BYTES
+                    if not truncated:
+                        evidence.extend(data)
+                return self._build_bytes_response(status, data, content_type, upstream_resp.headers)
+        except asyncio.CancelledError:
+            disconnected = True
+            raise
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            disconnected = True
+            return stream_resp if stream_resp is not None else web.Response(status=499)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            caught = type(exc).__name__
+            if stream_resp is None:
+                return self._build_bytes_response(
+                    502,
+                    b'{"error":{"type":"bridge_error","message":"Upstream connection failed"}}',
+                )
+            return stream_resp
         finally:
-            server.server_close()
-            self._server = None
+            calls, parse = _observed_calls(bytes(evidence), content_type, truncated)
+            self.record({
+                **experiment_meta,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "route": request.path,
+                "model": incoming.get("model"),
+                "mode": "passthrough",
+                "client_stream": bool(incoming.get("stream")),
+                "upstream_status": status,
+                "returned_calls": calls,
+                "call_parse": parse,
+                "client_disconnected": disconnected,
+                "error": caught,
+            })
+
+    async def _translated(
+        self,
+        request: web.Request,
+        session: aiohttp.ClientSession,
+        incoming: dict,
+        experiment_meta: dict,
+    ) -> web.StreamResponse:
+        scope = conversation_key(incoming)
+        # Do not allow different authenticated clients/models to share the
+        # optional continuation cache. Hash credentials only in memory.
+        owner = hashlib.sha256(
+            (request.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()
+        ).hexdigest()
+        key = owner + ":" + scope if scope else None
+        outgoing, declarations = translate_request(incoming, self.registry.get(key))
+        self.registry.put(key, declarations)
+        outgoing["stream"] = False
+        encoded_body = json.dumps(outgoing, ensure_ascii=False).encode("utf-8")
+        experiment_meta["upstream_request_bytes"] = len(encoded_body)
+        target_url = self._target_url(request)
+        headers = _upstream_headers(request)
+        recorded = False
+        disconnected = False
+        upstream_status: Optional[int] = None
+        stream_resp: Optional[web.StreamResponse] = None
+
+        async def _fetch() -> Tuple[int, Any, bytes]:
+            async with session.post(
+                target_url,
+                data=encoded_body,
+                headers=headers,
+                allow_redirects=False,
+                auto_decompress=True,
+            ) as upstream_resp:
+                return upstream_resp.status, upstream_resp.headers, await upstream_resp.read()
+
+        fetch_task = asyncio.create_task(_fetch())
+        try:
+            while not fetch_task.done():
+                done, _ = await asyncio.wait({fetch_task}, timeout=self.heartbeat_interval)
+                if fetch_task in done:
+                    break
+                if incoming.get("stream"):
+                    if stream_resp is None:
+                        stream_resp = await self._start_stream(request)
+                    await stream_resp.write(b": bridge waiting for upstream\n\n")
+            try:
+                status, resp_headers, raw = await fetch_task
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                raise ValueError("Upstream connection failed") from exc
+
+            upstream_status = status
+            if not 200 <= status < 300:
+                experiment_meta["error_origin"] = "upstream_http"
+                experiment_meta["reasoning_required_error"] = (
+                    b"reasoning_text" in raw and b"passed back" in raw
+                )
+                if stream_resp is None:
+                    return self._build_bytes_response(
+                        status, raw, resp_headers.get("Content-Type", "application/json"), resp_headers
+                    )
+                await stream_resp.write(_stream_error_bytes("upstream_http_error", status))
+                await stream_resp.write_eof()
+                return stream_resp
+
+            body = json.loads(raw)
+            if not isinstance(body, dict):
+                raise ValueError("Upstream response must be an object")
+            response_id = body.get("id")
+            if isinstance(response_id, str) and response_id:
+                self.registry.put(owner + ":" + response_key(response_id), declarations)
+            if is_deepseek_flash_model(incoming.get("model")):
+                body, normalized = normalize_deepseek_reasoning(body)
+                experiment_meta["reasoning_output_normalized"] = normalized
+                self.reasoning_history.remember(owner, body)
+            upstream_calls = call_metadata(body)
+            diagnostics: List[dict] = []
+            body = translate_response(body, declarations, diagnostics)
+            raw_out = (
+                _sse_response(body)
+                if incoming.get("stream")
+                else json.dumps(body, ensure_ascii=False).encode("utf-8")
+            )
+            input_items = incoming.get("input")
+            meta = {
+                **experiment_meta,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+                "route": request.path,
+                "model": incoming.get("model"),
+                "mode": "translate",
+                "client_stream": bool(incoming.get("stream")),
+                "declared": declarations.describe(),
+                "declared_sources": [
+                    source
+                    for source, present in (
+                        (
+                            "additional_tools",
+                            isinstance(input_items, list)
+                            and any(
+                                isinstance(x, dict) and x.get("type") == "additional_tools"
+                                for x in input_items
+                            ),
+                        ),
+                        ("top_level_tools", bool(incoming.get("tools"))),
+                    )
+                    if present
+                ],
+                "upstream_calls": upstream_calls,
+                "translated_calls": call_metadata(body),
+                "client_events": _sse_event_names(raw_out) if incoming.get("stream") else [],
+                "diagnostics": diagnostics,
+                "upstream_status": status,
+            }
+            self.record(meta)
+            recorded = True
+            self.capture(raw.decode("utf-8", "replace"), raw_out.decode("utf-8", "replace"), meta)
+            if stream_resp is not None:
+                await stream_resp.write(raw_out)
+                await stream_resp.write_eof()
+                return stream_resp
+            return self._build_bytes_response(
+                status,
+                raw_out,
+                "text/event-stream" if incoming.get("stream") else "application/json",
+            )
+        except asyncio.CancelledError:
+            disconnected = True
+            raise
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            disconnected = True
+            return stream_resp if stream_resp is not None else web.Response(status=499)
+        except (OSError, ValueError, TypeError, aiohttp.ClientError):
+            # Never render exception text: it may contain upstream bodies,
+            # URLs, arguments or credentials.
+            if stream_resp is not None:
+                with contextlib.suppress(OSError, ConnectionResetError):
+                    await stream_resp.write(_stream_error_bytes("bridge_error"))
+                    await stream_resp.write_eof()
+                return stream_resp
+            return self._build_bytes_response(
+                502,
+                b'{"error":{"type":"bridge_error","message":"Invalid request or upstream failure"}}',
+            )
+        finally:
+            if not fetch_task.done():
+                fetch_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await fetch_task
+            if not recorded:
+                self.record({
+                    **experiment_meta,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "model": incoming.get("model"),
+                    "mode": "translate",
+                    "upstream_status": upstream_status,
+                    "client_disconnected": disconnected,
+                    "error": "translation_not_completed",
+                })
+
+    async def _handle_post(
+        self, request: web.Request, session: aiohttp.ClientSession
+    ) -> web.StreamResponse:
+        experiment_meta: Dict[str, Any] = {
+            "request_ref": uuid.uuid4().hex[:12],
+            "bridge_version": BRIDGE_VERSION,
+        }
+        with self._activity_lock:
+            self._active_requests += 1
+        try:
+            if request.headers.get("Upgrade"):
+                return self._build_bytes_response(501, b'{"error":"WebSocket is not supported"}')
+            route = request.path
+            if route not in _SUPPORTED_ROUTES:
+                return self._build_bytes_response(404, b'{"error":"Unsupported route"}')
+            try:
+                raw_body = await _read_request_body(request)
+            except _UnsupportedEncodingError:
+                return self._build_bytes_response(
+                    415, b'{"error":"Unsupported request encoding"}'
+                )
+            except _RequestLimitError:
+                self.record({
+                    **experiment_meta,
+                    "error_origin": "local_request_limit",
+                    "http_status": 413,
+                })
+                return self._build_bytes_response(
+                    413, b'{"error":"Invalid or oversized request"}'
+                )
+            experiment_meta["request_bytes"] = len(raw_body)
+            incoming = json.loads(raw_body)
+            if not isinstance(incoming, dict):
+                raise ValueError("Request must be an object")
+            selected = self.translates(incoming.get("model"))
+            mode, protocol, context = policy(
+                self.experiment_mode_file, self.protocol_translation, self.context_recovery
+            )
+            experiment_meta.update(
+                experiment_mode=mode if selected else "out_of_scope",
+                in_scope=selected,
+                context_recovery={"enabled": False},
+                route=route,
+            )
+            if selected:
+                experiment_meta["request_tools"] = _declaration_metadata(incoming)
+            if selected and protocol and is_deepseek_flash_model(incoming.get("model")):
+                owner = hashlib.sha256(
+                    (request.headers.get("Authorization", "") + "\0" + str(incoming.get("model"))).encode()
+                ).hexdigest()
+                incoming, normalized = normalize_deepseek_reasoning(incoming)
+                experiment_meta["reasoning_input_normalized"] = normalized
+                incoming, restored = self.reasoning_history.restore(owner, incoming)
+                experiment_meta["reasoning_items_restored"] = restored
+                experiment_meta["reasoning_inventory"] = reasoning_inventory(incoming)
+                if restored or normalized:
+                    raw_body = json.dumps(incoming, ensure_ascii=False).encode("utf-8")
+            compact = compaction_reason(incoming, route)
+            experiment_meta["request_kind"] = "compaction" if compact else "response"
+            if compact:
+                # A transforms tools/history and forces stream=False; B
+                # changes messages. Neither is valid for opaque compact
+                # operations. Preserve the original body and response,
+                # including stream framing, in every mode/model scope.
+                experiment_meta["bypass_reason"] = compact
+                return await self._relay_verbatim(request, session, raw_body, incoming, experiment_meta)
+            if selected and context:
+                _, declared = translate_request(incoming)
+                incoming, recovery = recover_context(incoming, declared)
+                experiment_meta["context_recovery"] = recovery
+                if recovery["hint_added"] or recovery["removed_messages"]:
+                    raw_body = json.dumps(incoming, ensure_ascii=False).encode("utf-8")
+            if selected and protocol:
+                return await self._translated(request, session, incoming, experiment_meta)
+            return await self._relay_verbatim(request, session, raw_body, incoming, experiment_meta)
+        except asyncio.CancelledError:
+            raise
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return web.Response(status=499)
+        except (OSError, ValueError, TypeError, aiohttp.ClientError):
+            return self._build_bytes_response(
+                502,
+                b'{"error":{"type":"bridge_error","message":"Invalid request or upstream failure"}}',
+            )
+        finally:
+            with self._activity_lock:
+                self._active_requests -= 1
+
+    async def _serve_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+        family = socket.AF_INET6 if self.host == "::1" else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            if os.name != "nt":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((self.host, self.port))
+            sock.listen(128)
+            sock.setblocking(False)
+        except BaseException:
+            sock.close()
+            raise
+
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            connect=self.timeout,
+            sock_connect=self.timeout,
+            sock_read=self.timeout,
+        )
+        session = aiohttp.ClientSession(timeout=timeout, trust_env=False, auto_decompress=True)
+        app = web.Application(client_max_size=0)
+
+        async def handle_post(req: web.Request) -> web.StreamResponse:
+            return await self._handle_post(req, session)
+
+        app.router.add_get("/{tail:.*}", self._handle_get)
+        app.router.add_post("/{tail:.*}", handle_post)
+        runner = web.AppRunner(
+            app,
+            handler_cancellation=True,
+            access_log=None,
+            logger=_SILENT_LOGGER,
+            shutdown_timeout=2.0,
+        )
+        site_started = False
+        try:
+            await runner.setup()
+            site = web.SockSite(runner, sock)
+            await site.start()
+            site_started = True
+            with self._activity_lock:
+                self._bound_port = sock.getsockname()[1]
+                self._loop = loop
+                self._stop_event = stop_event
+                if self._stop_requested:
+                    stop_event.set()
+            if os.name != "nt" and threading.current_thread() is threading.main_thread():
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    with contextlib.suppress(NotImplementedError, ValueError):
+                        loop.add_signal_handler(sig, stop_event.set)
+            self._ready.set()
+            await stop_event.wait()
+        finally:
             self._ready.clear()
+            if not site_started:
+                sock.close()
+            await runner.cleanup()
+            await session.close()
+            with self._activity_lock:
+                self._loop = None
+                self._stop_event = None
+                self._bound_port = None
+                self._stop_requested = False
+
+    def serve_forever(self) -> None:
+        asyncio.run(self._serve_async())
 
 
 def run_bridge(
