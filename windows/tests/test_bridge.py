@@ -1307,3 +1307,162 @@ def test_empty_scoped_models_is_refused():
     assert scoped.translates("deepseek-v4.1-flash")
     assert not scoped.translates("gpt-6-astra")
     assert not scoped.translates(None)
+
+
+def test_bridge_supports_chunked_and_gzip_requests_and_gzip_upstream(tmp_path: Path):
+    import gzip
+    import http.client
+
+    received: list[bytes] = []
+    upstream_reply = json.dumps(_relay_reply(1)).encode("utf-8")
+
+    class GzipRelay(BaseHTTPRequestHandler):
+        def log_message(self, *_args) -> None:
+            return
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            received.append(self.rfile.read(length))
+            body = gzip.compress(upstream_reply)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    relay = ThreadingHTTPServer(("127.0.0.1", 0), GzipRelay)
+    rw = threading.Thread(target=relay.serve_forever, daemon=True)
+    rw.start()
+    bridge = BridgeServer(upstream_url=f"http://127.0.0.1:{relay.server_port}", port=0)
+    bw = threading.Thread(target=bridge.serve_forever, daemon=True)
+    bw.start()
+    assert bridge.wait_ready()
+    try:
+        payload = _request()
+        payload["stream"] = False
+        gz = gzip.compress(json.dumps(payload).encode("utf-8"))
+        # Send both Transfer-Encoding: chunked and Content-Encoding: gzip.
+        mid = len(gz) // 2
+        chunked = (
+            f"{mid:x}\r\n".encode("ascii") + gz[:mid] + b"\r\n"
+            + f"{len(gz) - mid:x}\r\n".encode("ascii") + gz[mid:] + b"\r\n0\r\n\r\n"
+        )
+        conn = http.client.HTTPConnection("127.0.0.1", bridge.bound_port, timeout=5)
+        try:
+            conn.putrequest("POST", "/responses")
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("Content-Encoding", "gzip")
+            conn.putheader("Transfer-Encoding", "chunked")
+            conn.endheaders()
+            conn.send(chunked)
+            resp = conn.getresponse()
+            assert resp.status == 200
+            data = json.loads(resp.read())
+            item = data["response"]["output"][0]
+            assert item["type"] == "custom_tool_call"
+            assert item["name"] == "exec"
+        finally:
+            conn.close()
+
+        # Unknown Content-Encoding is still rejected with 415.
+        conn2 = http.client.HTTPConnection("127.0.0.1", bridge.bound_port, timeout=5)
+        try:
+            conn2.request("POST", "/responses", b"{}", {
+                "Content-Type": "application/json",
+                "Content-Encoding": "unknown-codec",
+            })
+            assert conn2.getresponse().status == 415
+        finally:
+            conn2.close()
+        assert len(received) == 1
+    finally:
+        bridge.stop()
+        bw.join(3)
+        relay.shutdown()
+        relay.server_close()
+        rw.join(3)
+
+
+def test_bridge_emits_sse_heartbeat_and_cancels_upstream_on_client_disconnect(tmp_path: Path):
+    import socket as _socket
+
+    upstream_started = threading.Event()
+    upstream_aborted = threading.Event()
+    slow_release = threading.Event()
+    mode_flag = {"phase": "heartbeat"}
+
+    class SlowRelay(BaseHTTPRequestHandler):
+        def log_message(self, *_args) -> None:
+            return
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            if mode_flag["phase"] == "heartbeat":
+                slow_release.wait(2.0)
+                body = json.dumps(_relay_reply(1)).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            upstream_started.set()
+            # Wait for the bridge to close our TCP connection upon client cancel.
+            self.connection.settimeout(3.0)
+            try:
+                if self.connection.recv(1) == b"":
+                    upstream_aborted.set()
+            except OSError:
+                upstream_aborted.set()
+
+    record = tmp_path / "cancel.jsonl"
+    relay = ThreadingHTTPServer(("127.0.0.1", 0), SlowRelay)
+    rw = threading.Thread(target=relay.serve_forever, daemon=True)
+    rw.start()
+    bridge = BridgeServer(
+        upstream_url=f"http://127.0.0.1:{relay.server_port}",
+        port=0,
+        heartbeat_interval=0.1,
+        record_path=str(record),
+    )
+    bw = threading.Thread(target=bridge.serve_forever, daemon=True)
+    bw.start()
+    assert bridge.wait_ready()
+    try:
+        # 1. Slow streaming request receives heartbeat comment before final SSE events.
+        def _release_later():
+            import time as _time
+            _time.sleep(0.25)
+            slow_release.set()
+
+        threading.Thread(target=_release_later, daemon=True).start()
+        raw_req = json.dumps(_request()).encode("utf-8")
+        status, ctype, body = _post_exact(f"http://127.0.0.1:{bridge.bound_port}/responses", raw_req)
+        assert status == 200 and ctype.startswith("text/event-stream")
+        assert b": bridge waiting for upstream\n\n" in body
+        assert _sse_events(body)[-1]["type"] == "response.completed"
+
+        # 2. Client disconnecting before upstream headers cancels the pending upstream call.
+        mode_flag["phase"] = "cancel"
+        sock = _socket.create_connection(("127.0.0.1", bridge.bound_port), timeout=5)
+        try:
+            http_req = (
+                f"POST /responses HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                f"Content-Type: application/json\r\nContent-Length: {len(raw_req)}\r\n\r\n"
+            ).encode("ascii") + raw_req
+            sock.sendall(http_req)
+            assert upstream_started.wait(3.0)
+        finally:
+            sock.close()
+        assert upstream_aborted.wait(3.0), "upstream connection was not released on client disconnect"
+    finally:
+        bridge.stop()
+        bw.join(3)
+        relay.shutdown()
+        relay.server_close()
+        rw.join(3)
+
+    rows = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines() if line]
+    assert any(row.get("client_disconnected") is True for row in rows)

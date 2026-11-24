@@ -2,7 +2,6 @@
 from __future__ import annotations
 import contextlib
 import copy
-import ctypes
 import hashlib
 import json
 import os
@@ -17,6 +16,10 @@ import tomllib
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
+from filelock import FileLock, Timeout as FileLockTimeout
+import psutil
+import tomlkit
+from tomlkit.exceptions import TOMLKitError
 from .bridge import BridgeServer
 from .tool_recovery import MODES
 
@@ -47,26 +50,22 @@ def replace_url(raw, provider, expected_url, new_url):
     parsed = tomllib.loads(text)
     try:
         current = parsed['model_providers'][provider]['base_url']
-    except KeyError:
+    except (KeyError, TypeError):
         raise BridgeActionError('目标 provider/base_url 不存在，未修改配置。') from None
     if current != expected_url:
         raise BridgeActionError('目标 base_url 被其他操作改动，拒绝覆盖。')
-    header = re.compile(r'''^\s*\[model_providers\.(?:"([^"\\]+)"|'([^']+)'|([\w-]+))\]\s*(?:#.*)?$''')
-    value = re.compile(r'''^(\s*base_url\s*=\s*)("(?:\\.|[^"\\])*"|'[^']*')(\s*(?:#[^\r\n]*)?)(\r?\n)?$''')
-    active = False
-    changed = 0
-    lines = text.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith('['):
-            match = header.fullmatch(stripped)
-            active = bool(match and provider in match.groups())
-        if active and (m := value.fullmatch(line)):
-            lines[i] = m[1] + json.dumps(new_url, ensure_ascii=False) + m[3] + (m[4] or '')
-            changed += 1
-    if changed != 1:
-        raise BridgeActionError('不支持此配置排版，无法唯一定位 base_url；未修改。')
-    result = ''.join(lines).encode('utf-8')
+    try:
+        doc = tomlkit.parse(text)
+        providers = doc.get('model_providers')
+        if providers is None or provider not in providers:
+            raise KeyError(provider)
+        table = providers[provider]
+        if not hasattr(table, '__setitem__') or 'base_url' not in table:
+            raise KeyError('base_url')
+        table['base_url'] = new_url
+        result = tomlkit.dumps(doc).encode('utf-8')
+    except (TOMLKitError, KeyError, TypeError):
+        raise BridgeActionError('不支持此配置排版，无法唯一定位 base_url；未修改。') from None
     wanted = copy.deepcopy(parsed)
     wanted['model_providers'][provider]['base_url'] = new_url
     if tomllib.loads(result.decode('utf-8')) != wanted:
@@ -82,53 +81,49 @@ def clean_env():
 
 def process_identity(pid):
     if not isinstance(pid, int) or pid <= 0: return None
-    if os.name != 'nt':
-        try:
-            p = Path('/proc') / str(pid)
-            return {'pid': pid, 'start_ticks': (p/'stat').read_text().rsplit(') ', 1)[1].split()[19],
-                    'exe': os.readlink(p/'exe')}
-        except (OSError, ValueError, IndexError): return None
-    from ctypes import wintypes
-    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-    kernel.OpenProcess.restype = wintypes.HANDLE
-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-    kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
-    handle = kernel.OpenProcess(0x1000, False, pid)
-    if not handle: return None
     try:
-        times = [wintypes.FILETIME() for _ in range(4)]
-        size = wintypes.DWORD(32768); path = ctypes.create_unicode_buffer(size.value)
-        if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)): return None
-        if not kernel.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)): return None
-        born = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-        return {'pid': pid, 'start_ticks': str(born), 'exe': path.value}
-    finally: kernel.CloseHandle(handle)
+        proc = psutil.Process(pid)
+        if proc.status() == psutil.STATUS_ZOMBIE: return None
+        exe = proc.exe()
+        create_time = proc.create_time()
+    except (psutil.Error, OSError):
+        return None
+    if not exe: return None
+    return {'pid': pid, 'start_ticks': f'{create_time:.6f}', 'exe': exe}
 
 
 def desktop_running(config):
-    ps = (Path(os.environ.get('SystemRoot', r'C:\Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
-          if os.name == 'nt' else Path('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'))
+    if os.name == 'nt':
+        for proc in psutil.process_iter(['name', 'exe']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                stem = name[:-4] if name.endswith('.exe') else name
+                if stem == 'codex': return True
+                if stem == 'chatgpt' and 'openai.codex' in (proc.info.get('exe') or '').lower():
+                    return True
+            except (psutil.Error, OSError):
+                continue
+        return False
+    # WSL -> Windows host boundary: Linux psutil cannot inspect host Windows processes.
+    ps = Path('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe')
     if ps.is_file():
         command = "@(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'Codex' -or $_.Path -like '*OpenAI.Codex*' }).Count; exit 0"
         result = subprocess.run([str(ps), '-NoProfile', '-NonInteractive', '-Command', command],
-                                capture_output=True, timeout=15, env=clean_env(),
-                                **({'creationflags': 0x08000000} if os.name == 'nt' else {}))
+                                capture_output=True, timeout=15, env=clean_env())
         try:
             if result.returncode or int(result.stdout.decode('utf-8-sig').strip()) != 0: return True
         except ValueError:
             raise BridgeActionError('无法确认 Codex 是否退出；未修改连接。') from None
-    elif os.name == 'nt':
-        raise BridgeActionError('无法检查 Codex 进程；未修改连接。')
-    if os.name != 'nt':
-        for p in Path('/proc').glob('[0-9]*'):
-            try:
-                if b'app-server' not in (p/'cmdline').read_bytes().split(b'\0'): continue
-                home = next((v.split(b'=', 1)[1] for v in (p/'environ').read_bytes().split(b'\0')
-                             if v.startswith(b'CODEX_HOME=')), None)
-                if home and Path(os.fsdecode(home)).resolve() == config.parent.resolve(): return True
-            except (OSError, ValueError): pass
+    target_home = config.parent.resolve()
+    for proc in psutil.process_iter(['cmdline', 'environ']):
+        try:
+            cmdline = proc.info.get('cmdline') or []
+            if 'app-server' not in cmdline: continue
+            env = proc.info.get('environ') or {}
+            home = env.get('CODEX_HOME')
+            if home and Path(home).resolve() == target_home: return True
+        except (psutil.Error, OSError, ValueError):
+            continue
     return False
 
 
@@ -157,22 +152,15 @@ def save_state(config, state):
 
 @contextlib.contextmanager
 def transaction_lock(config):
-    path = config.with_name(config.name + '.bridge-manager.lock')
-    with path.open('a+b') as f:
-        if os.name == 'nt':
-            import msvcrt
-            if path.stat().st_size == 0: f.write(b'0'); f.flush()
-            f.seek(0)
-            try: msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError: raise BridgeActionError('另一个窗口正在操作桥，请稍后刷新。') from None
-            try: yield
-            finally: f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError: raise BridgeActionError('另一个窗口正在操作桥，请稍后刷新。') from None
-            try: yield
-            finally: fcntl.flock(f, fcntl.LOCK_UN)
+    lock = FileLock(str(config.with_name(config.name + '.bridge-manager.lock')))
+    try:
+        lock.acquire(blocking=False)
+    except FileLockTimeout:
+        raise BridgeActionError('另一个窗口正在操作桥，请稍后刷新。') from None
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def valid_url(value, local=False):
