@@ -1,47 +1,45 @@
 # 开发与发行
 
 本文面向维护者，负责源码验证和交付流程；用户安装与使用见 [README](../README.md)。
-`Package.swift` 持有平台与构建合同，`script/` 持有构建和发行实现。
+版本唯一真相由 [`product-version.json`](../product-version.json) 持有，`Package.swift`
+持有依赖与目标，[`script/`](../script) 持有本地构建与打包脚本，`.github/workflows/`
+持有 CI 与发行流水线。
 
-## 本地验证
+## 本地验证与开发运行
 
-需要 macOS 14、Xcode 命令行工具和 Swift 5.10 或更高版本：
+需要 macOS 14+、Xcode 命令行工具与 Swift 5.10+：
 
 ```bash
 swift test
+./script/verify_sparkle_contract.sh
 ```
 
-SwiftPM 按 `Package.swift` 和 `Package.resolved` 解析 TOMLKit，首次构建需要取得
-依赖源码。第三方许可由 `THIRD_PARTY_NOTICES.txt` 持有，构建脚本将它和项目许可证
-一并放入 App 资源目录。
+`Package.swift` 通过 SwiftPM 解析 TOMLKit 与 Sparkle 2 依赖；`verify_sparkle_contract.sh`
+验证 Sparkle feed URL（`releases/latest/download/appcast.xml`）、`SPUStandardUpdaterController`、
+`SUPublicEDKey` 与 `@executable_path/../Frameworks` rpath 契约。GUI 与同步 helper
+共用 `Sources/CodexModelCore`；排查模型合并或同步问题优先从共享核心及
+`Tests/CodexModelManagerTests` 定位。
 
-需要安装并启动开发版本时执行：
+本地安装并启动开发版：
 
 ```bash
 ./script/build_and_run.sh --verify
 ```
 
-该命令停止已有开发进程，将临时签名构建写入
-`~/Applications/CodexModelManager-Dev.app`，启动应用，并确认进程和内置
-`CodexModelSync` helper 存在。它不证明每日同步或用户配置已生效。
+该命令停止旧开发进程，生成临时签名包到 `~/Applications/CodexModelManager-Dev.app`，
+并验证主进程与内置 `CodexModelSync` helper 运行。Windows 端测试与构筑入口位于
+`windows/`，由 `.github/workflows/windows.yml` 与 `windows-preview.yml` 维护。
 
-GUI 和同步 helper 复用 `Sources/CodexModelCore`。排查模型合并与设置问题时，
-从共享核心及 `Tests/CodexModelManagerTests` 查起，避免在 GUI 重建另一套规则。
+## 发行流程
 
-## 发行
-
-`script/release.sh X.Y.Z` 从源码构建 universal App，验证 Developer ID、Team ID
-和 hardened runtime，分别公证并装订 App 与 DMG，再生成 SHA-256 文件。
-签名与公证凭据通过环境提供，不写入文档、日志或仓库。
-
-产物为 `dist/Codex-Models.dmg` 和对应的 SHA-256 文件。这个脚本生成并验证产物，不创建 GitHub Release；发布状态以
-实际 owner release 和下载字节回读为准。Homebrew Tap 只从该 release 投影 Cask。
-
-对外名称统一为 Codex Models，仓库和 Homebrew 安装名均为 `opl-codex-models`。
-应用包内的可执行文件、bundle ID、配置目录和后台任务标识沿用原值，确保现有安装和每日同步兼容。
-
-## 文档维护
-
-README 只解释当前用户流程，本页只解释维护交付。行为变化时更新对应段落，
-命令、默认配置和平台条件对照源码验证；不追加旧版本迁移段落或历史验收清单。
-过时说明保留在 Git 历史，新增文档须有独立读者任务并由现有入口链接。
+- **macOS 自动发行**（`.github/workflows/release.yml`）：推送与 `product-version.json`
+  匹配的 `v<version>` Annotated Tag 后，先核对祖先关系与现有 Release，再调用
+  `one-person-lab/.github/workflows/reusable-macos-sparkle-release.yml@main` 执行
+  通用二进制构筑（`--universal`）、Developer ID 签名、App/DMG 公证装订、`appcast.xml`
+  Ed25519 签名与公开发布回读校验；`release.yml` 仅发布精确的 `Codex-Models.dmg`、
+  `.sha256` 与 `appcast.xml`。
+- **本地离线打包**（调试用）：`SIGNING_IDENTITY=... TEAM_ID=... APPLE_NOTARY_PROFILE=... ./script/release.sh X.Y.Z`
+  构筑并公证通用 DMG 到 `dist/`。
+- **Homebrew 分发**：`homebrew-one-person-lab` 的 `Casks/opl-codex-models.rb` 开启
+  `auto_updates true` 并与 GitHub Release + Sparkle 2 自动更新协同工作。应用包内部
+  bundle ID（`com.onepersonlab.codex-model-manager`）、helper 名称与配置目录保持稳定。
