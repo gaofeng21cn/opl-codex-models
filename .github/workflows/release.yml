@@ -44,9 +44,11 @@ jobs:
   macos:
     needs: preflight
     if: needs.preflight.outputs.published != 'true'
-    uses: gaofeng21cn/one-person-lab/.github/workflows/reusable-macos-sparkle-release.yml@main
+    uses: gaofeng21cn/opl-release/.github/workflows/reusable-macos-sparkle-release.yml@v1
     secrets: inherit
     with:
+      subject_id: opl-codex-models
+      lane: stable
       release_tag: ${{ github.ref_name }}
       app_name: CodexModelManager.app
       dmg_name: Codex-Models.dmg
