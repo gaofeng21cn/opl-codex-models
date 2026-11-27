@@ -18,7 +18,7 @@ grep -Fq 'Sparkle.framework' "$ROOT_DIR/script/build_app.sh"
 grep -Fq 'Installer.xpc' "$ROOT_DIR/script/build_app.sh"
 grep -Fq 'Downloader.xpc' "$ROOT_DIR/script/build_app.sh"
 
-grep -Fq 'gaofeng21cn/one-person-lab/.github/workflows/reusable-macos-sparkle-release.yml@main' \
+grep -Fq 'gaofeng21cn/opl-release/.github/workflows/reusable-macos-sparkle-release.yml@v1' \
     "$ROOT_DIR/.github/workflows/release.yml"
 grep -Fq 'appcast.xml' "$ROOT_DIR/.github/workflows/release.yml"
 
