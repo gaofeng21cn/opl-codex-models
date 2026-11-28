@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       published: ${{ steps.source.outputs.published }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,6 +32,7 @@ jobs:
           set -euo pipefail
           version="$(jq -er .version product-version.json)"
           test "$GITHUB_REF_NAME" = "v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
           git fetch origin main --quiet
           git merge-base --is-ancestor HEAD origin/main
@@ -62,6 +64,7 @@ jobs:
       preflight_command: "swift test && ./script/verify_sparkle_contract.sh"
       build_app_command: './script/build_app.sh --configuration release --output dist/CodexModelManager.app --identity "$OPL_SIGNING_IDENTITY" --version "${RELEASE_TAG#v}" --universal'
       runs_on: macos-15
+      emit_receipt: false
 
   publish:
     needs:
@@ -150,3 +153,24 @@ jobs:
           if not enc.attrib.get(f"{{{sparkle_ns}}}edSignature"):
               raise SystemExit("appcast enclosure missing sparkle:edSignature")
           PY
+
+  emit-receipt:
+    needs:
+      - preflight
+      - macos
+      - publish
+    if: ${{ always() && !cancelled() }}
+    permissions:
+      contents: read
+    uses: gaofeng21cn/opl-release/.github/workflows/reusable-emit-receipt.yml@v1
+    with:
+      subject_id: opl-codex-models
+      lane: stable
+      stage: ${{ needs.publish.result == 'success' && 'verified' || 'blocked' }}
+      version: ${{ needs.preflight.outputs.version }}
+      tag: ${{ github.ref_name }}
+      commit: ${{ github.sha }}
+      published_version: ${{ needs.publish.result == 'success' && needs.preflight.outputs.version || '' }}
+      published_tag: ${{ needs.publish.result == 'success' && github.ref_name || '' }}
+      blocker_code: ${{ needs.publish.result != 'success' && 'release_publish_failed' || '' }}
+      blocker_message: ${{ needs.publish.result != 'success' && 'Codex Models release publish job did not succeed' || '' }}

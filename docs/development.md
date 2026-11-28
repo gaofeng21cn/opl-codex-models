@@ -34,7 +34,7 @@ swift test
 
 - **macOS 自动发行**（`.github/workflows/release.yml`）：推送与 `product-version.json`
   匹配的 `v<version>` Annotated Tag 后，先核对祖先关系与现有 Release，再调用
-  `one-person-lab/.github/workflows/reusable-macos-sparkle-release.yml@main` 执行
+  `gaofeng21cn/opl-release/.github/workflows/reusable-macos-sparkle-release.yml@v1` 执行
   通用二进制构筑（`--universal`）、Developer ID 签名、App/DMG 公证装订、`appcast.xml`
   Ed25519 签名与公开发布回读校验；`release.yml` 仅发布精确的 `Codex-Models.dmg`、
   `.sha256` 与 `appcast.xml`。
